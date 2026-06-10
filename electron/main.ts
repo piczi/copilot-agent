@@ -1,0 +1,885 @@
+import { app, BrowserWindow, ipcMain } from 'electron'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import StoreModule from 'electron-store'
+import { SYSTEM_PROMPT } from '@/agent/prompts/system'
+const Store = (StoreModule as any).default || StoreModule
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+process.env.APP_ROOT = path.join(__dirname, '..')
+
+export const RENDERER_URL = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL']
+export const MAIN_DIST = path.join(process.env.APP_ROOT, 'dist')
+export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'renderer')
+
+process.env.VITE_PUBLIC = RENDERER_URL
+  ? path.join(process.env.APP_ROOT, 'public')
+  : RENDERER_DIST
+
+const store = new Store()
+const LLM_CONFIG_KEY = 'llm-config'
+const MAX_COMMAND_LENGTH = 2000
+const MAX_OUTPUT_LENGTH = 100_000
+const APPROVAL_TTL_MS = 60_000
+
+type CommandMode = 'restricted' | 'dangerous'
+
+interface LLMConfig {
+  provider: 'openai' | 'anthropic' | 'deepseek' | 'ollama' | 'custom'
+  apiKey: string
+  baseURL?: string
+  model: string
+  proxy?: string
+  hasApiKey?: boolean
+}
+
+interface ExecCommandOptions {
+  cwd?: string
+  mode?: CommandMode
+  approvalToken?: string
+}
+
+interface ApprovalRecord {
+  command: string
+  cwd: string
+  expiresAt: number
+}
+
+const DEFAULT_CONFIG: LLMConfig = {
+  provider: 'deepseek',
+  apiKey: '',
+  baseURL: 'https://api.deepseek.com/v1',
+  model: 'deepseek-chat'
+}
+
+const approvalTokens = new Map<string, ApprovalRecord>()
+const activeChatStreams = new Map<string, () => void>()
+
+interface ChatStreamPayload {
+  type: 'thinking' | 'thinking_done' | 'text' | 'replace_text' | 'done' | 'error'
+  chunk?: string
+  error?: string
+}
+
+interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content?: string | null
+  tool_calls?: ToolCallRequest[]
+  tool_call_id?: string
+}
+
+interface ToolCallRequest {
+  id: string
+  type: 'function'
+  function: {
+    name: string
+    arguments: string
+  }
+}
+
+function isProvider(value: unknown): value is LLMConfig['provider'] {
+  return value === 'openai' || value === 'anthropic' || value === 'deepseek' || value === 'ollama' || value === 'custom'
+}
+
+function cleanConfig(config: Partial<LLMConfig>, existing?: LLMConfig): LLMConfig {
+  const provider = isProvider(config.provider) ? config.provider : existing?.provider || DEFAULT_CONFIG.provider
+  const apiKey = typeof config.apiKey === 'string' && config.apiKey.trim()
+    ? config.apiKey.trim()
+    : existing?.apiKey || ''
+  const baseURL = typeof config.baseURL === 'string'
+    ? config.baseURL.trim()
+    : existing?.baseURL || DEFAULT_CONFIG.baseURL
+  const model = typeof config.model === 'string' && config.model.trim()
+    ? config.model.trim()
+    : existing?.model || DEFAULT_CONFIG.model
+
+  return {
+    provider,
+    apiKey,
+    baseURL,
+    model,
+    proxy: typeof config.proxy === 'string' ? config.proxy.trim() : existing?.proxy
+  }
+}
+
+function getStoredLLMConfig(): LLMConfig {
+  const stored = store.get(LLM_CONFIG_KEY)
+  if (stored && typeof stored === 'object') {
+    return cleanConfig(stored as Partial<LLMConfig>, DEFAULT_CONFIG)
+  }
+  return cleanConfig(DEFAULT_CONFIG)
+}
+
+function redactConfig(config: LLMConfig): LLMConfig {
+  return {
+    ...config,
+    apiKey: '',
+    hasApiKey: Boolean(config.apiKey)
+  }
+}
+
+function normalizeBaseURL(baseURL: string | undefined): string {
+  return (baseURL || '').replace(/\/+$/, '')
+}
+
+function isSafeReadOnlyCommand(command: string): boolean {
+  const normalized = command.trim()
+  const safePatterns = [
+    /^(pwd|dir|ls|whoami|hostname|uname|lscpu|free|df|sw_vers)(\s+[-\w./\\:=@{}'"^~]*)?$/i,
+    /^sysctl\s+[-\w.]+(\s+[-\w.]+)*$/i,
+    /^system_profiler\s+[-\w\s]+(\|\s*sed\s+-n\s+['"]?\d+,\d+p['"]?)?$/i,
+    /^git\s+(status|log|branch|show|diff)(\s+[-\w./\\:=@{}'"^~]+)*$/i,
+    /^Get-CimInstance\s+[\w.]+(\s*\|\s*Select-Object\s+[-\w\s,*]+)?$/i,
+    /^Get-ComputerInfo(\s*\|\s*Select-Object\s+[-\w\s,*]+)?$/i,
+    /^Get-ChildItem(\s+[-\w./\\:'",=(){}$]+)*$/i,
+    /^Get-Content(\s+[-\w./\\:'",=(){}$]+)*$/i,
+    /^Get-Location$/i,
+    /^(Get-Location|Get-ChildItem|Get-Content|Get-ComputerInfo|Get-CimInstance|Select-Object|ConvertTo-Json)(\s+[-\w./\\:'",=()|{}$]*)?$/i,
+    /^echo\s+[\w\s.,:;'"()[\]{}@/#\\-]*$/i
+  ]
+  return safePatterns.some((pattern) => pattern.test(normalized))
+}
+
+function commandNeedsApproval(command: string): boolean {
+  const normalized = command.toLowerCase()
+  const riskyPattern = /[;&><`\n\r]|\b(rm|del|erase|remove-item|rmdir|rd|move|mv|copy|cp|set-content|add-content|new-item|mkdir|touch|format|shutdown|restart-computer|curl|wget|invoke-webrequest|irm|npm\s+install|pnpm\s+add|yarn\s+add|pip\s+install|git\s+clean|git\s+reset|git\s+checkout)\b/
+  return riskyPattern.test(normalized)
+}
+
+function resolveCommandCwd(cwd?: string): { ok: true; cwd: string } | { ok: false; reason: string } {
+  const appRoot = process.env.APP_ROOT || process.cwd()
+  const requested = path.resolve(cwd || process.cwd())
+  const allowedRoots = [path.resolve(process.cwd()), path.resolve(appRoot)]
+  const isAllowed = allowedRoots.some((root) => requested === root || requested.startsWith(root + path.sep))
+
+  if (!isAllowed) {
+    return { ok: false, reason: '命令工作目录不在允许范围内' }
+  }
+  return { ok: true, cwd: requested }
+}
+
+function consumeApprovalToken(token: string | undefined, command: string, cwd: string): boolean {
+  if (!token) return false
+  const record = approvalTokens.get(token)
+  approvalTokens.delete(token)
+  return Boolean(record && record.command === command && record.cwd === cwd && record.expiresAt > Date.now())
+}
+
+function createApprovalToken(command: string, cwd: string): string {
+  const token = randomUUID()
+  approvalTokens.set(token, {
+    command,
+    cwd,
+    expiresAt: Date.now() + APPROVAL_TTL_MS
+  })
+  return token
+}
+
+function truncateOutput(output: string): string {
+  if (output.length <= MAX_OUTPUT_LENGTH) return output
+  return output.slice(0, MAX_OUTPUT_LENGTH) + '\n\n[输出已截断]'
+}
+
+function getPlatformName(): string {
+  if (process.platform === 'win32') return 'Windows'
+  if (process.platform === 'darwin') return 'macOS'
+  return 'Linux'
+}
+
+function getRuntimePlatformInstruction(): string {
+  if (process.platform === 'win32') {
+    return [
+      '当前运行平台：Windows (process.platform=win32)。',
+      '需要执行或建议系统命令时，必须使用 Windows PowerShell 语法，例如 Get-ChildItem、Get-Content、Select-String、Get-Location。',
+      '如果需要读取本机信息，必须调用 exec_bash 工具生成并执行只读 PowerShell 命令。',
+      '不要使用 uname、sysctl、system_profiler、ls -la 等 macOS/Linux 专属写法来判断本机信息。'
+    ].join('\n')
+  }
+
+  if (process.platform === 'darwin') {
+    return [
+      '当前运行平台：macOS (process.platform=darwin)。',
+      '需要执行或建议系统命令时，必须使用 macOS/POSIX Shell 语法，例如 uname、sysctl、system_profiler、ls、cat、grep、pwd。',
+      '如果需要读取本机信息，必须调用 exec_bash 工具生成并执行只读 macOS/POSIX 命令。',
+      '不要使用 Get-CimInstance、Get-ComputerInfo、PowerShell 管道对象等 Windows 专属写法来判断本机信息。'
+    ].join('\n')
+  }
+
+  return [
+    `当前运行平台：Linux (process.platform=${process.platform})。`,
+    '需要执行或建议系统命令时，必须使用 Linux/POSIX Shell 语法，例如 uname、lscpu、free、df、ls、cat、grep、pwd。',
+    '如果需要读取本机信息，必须调用 exec_bash 工具生成并执行只读 Linux/POSIX 命令。',
+    '不要使用 Get-CimInstance、system_profiler 等其他平台专属写法来判断本机信息。'
+  ].join('\n')
+}
+
+function runLocalCommand(
+  command: string,
+  signal?: AbortSignal
+): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+  return new Promise((resolve) => {
+    const isWin = process.platform === 'win32'
+    const commandText = isWin
+      ? `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${command}`
+      : command
+    const child = spawn(isWin ? 'powershell.exe' : '/bin/sh', isWin
+      ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', commandText]
+      : ['-c', commandText], {
+      cwd: process.cwd(),
+      env: process.env
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+
+    const settle = (result: { stdout: string; stderr: string; exitCode: number | null }) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', abort)
+      resolve(result)
+    }
+
+    const abort = () => {
+      child.kill()
+      settle({ stdout, stderr: stderr || '已取消', exitCode: -1 })
+    }
+
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (data) => { stdout = truncateOutput(stdout + data) })
+    child.stderr.on('data', (data) => { stderr = truncateOutput(stderr + data) })
+
+    const timer = setTimeout(() => {
+      child.kill()
+      settle({ stdout, stderr: stderr || '命令执行超时（30秒）', exitCode: -1 })
+    }, 30000)
+
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) {
+      abort()
+      return
+    }
+
+    child.on('close', (code) => {
+      settle({ stdout, stderr, exitCode: code })
+    })
+
+    child.on('error', (err) => {
+      settle({ stdout, stderr: err.message, exitCode: -1 })
+    })
+  })
+}
+
+function sendChatStreamEvent(sender: Electron.WebContents, requestId: string, payload: ChatStreamPayload): void {
+  if (!sender.isDestroyed()) {
+    sender.send(`chat-completion-stream:${requestId}`, payload)
+  }
+}
+
+function extractStreamDelta(line: string): {
+  content?: string
+  reasoning?: string
+  toolCalls?: Array<{
+    index: number
+    id?: string
+    name?: string
+    arguments?: string
+  }>
+  finishReason?: string
+  done?: boolean
+} | null {
+  if (!line.startsWith('data:')) return null
+  const data = line.slice(5).trim()
+  if (!data) return null
+  if (data === '[DONE]') return { done: true }
+
+  try {
+    const parsed = JSON.parse(data)
+    const choice = parsed.choices?.[0] || {}
+    const delta = choice.delta || {}
+    return {
+      content: delta.content || '',
+      reasoning: delta.reasoning_content || delta.reasoning || '',
+      finishReason: choice.finish_reason || '',
+      toolCalls: Array.isArray(delta.tool_calls)
+        ? delta.tool_calls.map((toolCall: any) => ({
+          index: toolCall.index,
+          id: toolCall.id,
+          name: toolCall.function?.name,
+          arguments: toolCall.function?.arguments
+        }))
+        : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
+function createContentRouter(emit: (payload: ChatStreamPayload) => void): {
+  push: (chunk: string) => void
+  flush: () => void
+} {
+  const thinkingStart = '<thinking>'
+  const thinkingEnd = '</thinking>'
+  let mode: 'unknown' | 'thinking' | 'text' = 'unknown'
+  let buffer = ''
+  let thinkingOpen = false
+
+  const finishThinking = () => {
+    if (thinkingOpen) {
+      thinkingOpen = false
+      emit({ type: 'thinking_done' })
+    }
+  }
+
+  const route = () => {
+    while (buffer) {
+      if (mode === 'unknown') {
+        if (buffer.startsWith(thinkingStart)) {
+          buffer = buffer.slice(thinkingStart.length)
+          mode = 'thinking'
+          thinkingOpen = true
+          continue
+        }
+        if (thinkingStart.startsWith(buffer)) return
+        mode = 'text'
+        continue
+      }
+
+      if (mode === 'thinking') {
+        const endIdx = buffer.indexOf(thinkingEnd)
+        if (endIdx !== -1) {
+          const thinkingChunk = buffer.slice(0, endIdx)
+          if (thinkingChunk) emit({ type: 'thinking', chunk: thinkingChunk })
+          buffer = buffer.slice(endIdx + thinkingEnd.length).replace(/^\s+/, '')
+          mode = 'text'
+          finishThinking()
+          continue
+        }
+
+        const safeLength = Math.max(0, buffer.length - thinkingEnd.length)
+        if (safeLength > 0) {
+          emit({ type: 'thinking', chunk: buffer.slice(0, safeLength) })
+          buffer = buffer.slice(safeLength)
+        }
+        return
+      }
+
+      emit({ type: 'text', chunk: buffer })
+      buffer = ''
+    }
+  }
+
+  return {
+    push: (chunk) => {
+      buffer += chunk
+      route()
+    },
+    flush: () => {
+      if (mode === 'thinking' && buffer) {
+        emit({ type: 'thinking', chunk: buffer })
+        buffer = ''
+        finishThinking()
+        return
+      }
+      if (buffer) {
+        emit({ type: 'text', chunk: buffer })
+        buffer = ''
+      }
+    }
+  }
+}
+
+function createTerminalBlock(command: string, platform: string, output: string, exitCode: number | null): string {
+  return `\`\`\`visual:terminal\n${JSON.stringify({
+    command,
+    platform,
+    output,
+    exitCode
+  }, null, 2)}\n\`\`\``
+}
+
+const CHAT_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'exec_bash',
+      description: '真实执行当前电脑上的只读系统命令。Windows 使用 PowerShell，macOS/Linux 使用 /bin/sh -c。只能用于读取信息，不能修改文件或安装软件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            description: '要真实执行的命令。必须符合当前运行平台语法。'
+          }
+        },
+        required: ['command']
+      }
+    }
+  }
+]
+
+async function executeExecBashTool(command: string, signal: AbortSignal): Promise<{
+  platform: string
+  command: string
+  output: string
+  exitCode: number | null
+}> {
+  const trimmedCommand = command.trim()
+  if (!trimmedCommand) {
+    return {
+      platform: getPlatformName(),
+      command,
+      output: '命令不能为空',
+      exitCode: -1
+    }
+  }
+
+  if (trimmedCommand.length > MAX_COMMAND_LENGTH) {
+    return {
+      platform: getPlatformName(),
+      command: trimmedCommand,
+      output: '命令过长',
+      exitCode: -1
+    }
+  }
+
+  if (!isSafeReadOnlyCommand(trimmedCommand) || commandNeedsApproval(trimmedCommand)) {
+    return {
+      platform: getPlatformName(),
+      command: trimmedCommand,
+      output: '该命令不在只读安全白名单中，已拒绝自动执行。',
+      exitCode: -1
+    }
+  }
+
+  const result = await runLocalCommand(trimmedCommand, signal)
+  return {
+    platform: getPlatformName(),
+    command: trimmedCommand,
+    output: result.stdout || result.stderr || '(无输出)',
+    exitCode: result.exitCode
+  }
+}
+
+async function streamChatCompletionTurn(
+  config: LLMConfig,
+  messages: ChatMessage[],
+  emit: (payload: ChatStreamPayload) => void,
+  contentRouter: ReturnType<typeof createContentRouter>,
+  signal: AbortSignal
+): Promise<ToolCallRequest[]> {
+  let reasoningStarted = false
+  const toolCallParts = new Map<number, ToolCallRequest>()
+
+  const res = await fetch(`${normalizeBaseURL(config.baseURL)}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages,
+      tools: CHAT_TOOLS,
+      tool_choice: 'auto',
+      temperature: 0.7,
+      stream: true
+    }),
+    signal
+  })
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`)
+  }
+
+  if (!res.body) {
+    throw new Error('API 响应格式异常，未返回可读流')
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const frames = buffer.split(/\r?\n\r?\n/)
+    buffer = frames.pop() || ''
+
+    for (const frame of frames) {
+      const lines = frame.split(/\r?\n/)
+      for (const line of lines) {
+        const delta = extractStreamDelta(line)
+        if (!delta) continue
+        if (delta.done) {
+          if (reasoningStarted) emit({ type: 'thinking_done' })
+          contentRouter.flush()
+          return [...toolCallParts.entries()]
+            .sort(([a], [b]) => a - b)
+            .map(([, toolCall]) => toolCall)
+        }
+        if (delta.reasoning) {
+          reasoningStarted = true
+          emit({ type: 'thinking', chunk: delta.reasoning })
+        }
+        if (delta.content) {
+          if (reasoningStarted) {
+            reasoningStarted = false
+            emit({ type: 'thinking_done' })
+          }
+          contentRouter.push(delta.content)
+        }
+        for (const part of delta.toolCalls || []) {
+          const existing = toolCallParts.get(part.index) || {
+            id: part.id || `tool_${part.index}`,
+            type: 'function' as const,
+            function: { name: part.name || '', arguments: '' }
+          }
+          if (part.id) existing.id = part.id
+          if (part.name) existing.function.name = part.name
+          if (part.arguments) existing.function.arguments += part.arguments
+          toolCallParts.set(part.index, existing)
+        }
+      }
+    }
+  }
+
+  if (reasoningStarted) emit({ type: 'thinking_done' })
+  contentRouter.flush()
+  return [...toolCallParts.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, toolCall]) => toolCall)
+}
+
+async function streamNativeChat(
+  config: LLMConfig,
+  message: string,
+  sender: Electron.WebContents,
+  requestId: string,
+  signal: AbortSignal
+): Promise<void> {
+  if (!config.apiKey) {
+    throw new Error('请先配置 LLM API Key（点击左上角设置图标）')
+  }
+  if (!config.baseURL) {
+    throw new Error('请先配置 Base URL')
+  }
+
+  const emit = (payload: ChatStreamPayload) => sendChatStreamEvent(sender, requestId, payload)
+  let visibleText = ''
+  const routedEmit = (payload: ChatStreamPayload) => {
+    if (payload.type === 'text' && payload.chunk) {
+      visibleText += payload.chunk
+    }
+    if (payload.type === 'replace_text' && payload.chunk !== undefined) {
+      visibleText = payload.chunk
+    }
+    emit(payload)
+  }
+  const contentRouter = createContentRouter(routedEmit)
+  const messages: ChatMessage[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: getRuntimePlatformInstruction() },
+    { role: 'user', content: message }
+  ]
+
+  for (let turn = 0; turn < 4; turn++) {
+    const toolCalls = await streamChatCompletionTurn(config, messages, routedEmit, contentRouter, signal)
+    if (signal.aborted) return
+    if (toolCalls.length === 0) {
+      emit({ type: 'done' })
+      return
+    }
+
+    messages.push({
+      role: 'assistant',
+      content: null,
+      tool_calls: toolCalls
+    })
+
+    for (const toolCall of toolCalls) {
+      if (toolCall.function.name !== 'exec_bash') {
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: JSON.stringify({ error: `未知工具：${toolCall.function.name}` })
+        })
+        continue
+      }
+
+      let command = ''
+      try {
+        command = JSON.parse(toolCall.function.arguments || '{}').command || ''
+      } catch {
+        command = ''
+      }
+
+      const baseText = visibleText.replace(/\s+$/, '')
+      const separator = baseText ? '\n\n' : ''
+      const pendingText = `${baseText}${separator}${createTerminalBlock(command, getPlatformName(), '命令由大模型生成，正在真实执行...', null)}`
+      routedEmit({ type: 'replace_text', chunk: pendingText })
+
+      const result = await executeExecBashTool(command, signal)
+      if (signal.aborted) return
+
+      const finalText = `${baseText}${separator}${createTerminalBlock(result.command, result.platform, result.output, result.exitCode)}`
+      routedEmit({ type: 'replace_text', chunk: finalText })
+      messages.push({
+        role: 'tool',
+        tool_call_id: toolCall.id,
+        content: JSON.stringify(result)
+      })
+    }
+  }
+
+  routedEmit({ type: 'text', chunk: '\n\n工具调用轮次过多，已停止继续执行。' })
+  emit({ type: 'done' })
+}
+
+ipcMain.handle('get-store-value', (_event, key: string) => {
+  return store.get(key)
+})
+
+ipcMain.handle('set-store-value', (_event, key: string, value: unknown) => {
+  store.set(key, value)
+})
+
+ipcMain.handle('get-llm-config', () => {
+  return redactConfig(getStoredLLMConfig())
+})
+
+ipcMain.handle('save-llm-config', (_event, config: Partial<LLMConfig>) => {
+  const existing = getStoredLLMConfig()
+  store.set(LLM_CONFIG_KEY, cleanConfig(config, existing))
+})
+
+async function nativeChat(config: LLMConfig, message: string): Promise<string> {
+  if (!config.apiKey) {
+    throw new Error('请先配置 LLM API Key（点击左上角设置图标）')
+  }
+  if (!config.baseURL) {
+    throw new Error('请先配置 Base URL')
+  }
+
+  const res = await fetch(`${normalizeBaseURL(config.baseURL)}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: getRuntimePlatformInstruction() },
+        { role: 'user', content: message }
+      ],
+      temperature: 0.7
+    })
+  })
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`)
+  }
+
+  const data = await res.json()
+  const msg = data.choices?.[0]?.message
+  const content = msg?.content || ''
+  const reasoning = msg?.reasoning_content || ''
+  if (!content && !reasoning) {
+    throw new Error('API 响应格式异常，未找到 content 或 reasoning_content 字段')
+  }
+  return reasoning ? `<thinking>${reasoning}</thinking>\n\n${content}` : content
+}
+
+ipcMain.handle('test-llm-config', async (_event, config: Partial<LLMConfig>) => {
+  const normalized = cleanConfig(config, getStoredLLMConfig())
+  if (!normalized.apiKey) {
+    return { ok: false, message: '请先填写 API Key' }
+  }
+  if (!normalized.baseURL) {
+    return { ok: false, message: '请先填写 Base URL' }
+  }
+
+  try {
+    const res = await fetch(`${normalizeBaseURL(normalized.baseURL)}/models`, {
+      headers: { Authorization: `Bearer ${normalized.apiKey}` }
+    })
+    const body = await res.text().catch(() => '')
+    if (res.ok) {
+      return { ok: true, message: `连接成功！Base URL: ${normalized.baseURL}, Model: ${normalized.model}` }
+    }
+    if (res.status === 401) {
+      return { ok: false, message: 'API Key 无效 (401)。请检查 Key 是否完整、是否属于该服务商。' }
+    }
+    return { ok: false, message: `连接失败 (HTTP ${res.status}): ${body.slice(0, 200)}` }
+  } catch (e) {
+    return { ok: false, message: `网络错误: ${e instanceof Error ? e.message : String(e)}` }
+  }
+})
+
+ipcMain.handle('chat-completion', async (_event, message: string) => {
+  return nativeChat(getStoredLLMConfig(), message)
+})
+
+ipcMain.on('chat-completion-stream', async (event, requestId: string, message: string) => {
+  const controller = new AbortController()
+  activeChatStreams.set(requestId, () => controller.abort())
+
+  try {
+    await streamNativeChat(getStoredLLMConfig(), message, event.sender, requestId, controller.signal)
+  } catch (e) {
+    if (!controller.signal.aborted) {
+      sendChatStreamEvent(event.sender, requestId, {
+        type: 'error',
+        error: e instanceof Error ? e.message : String(e)
+      })
+    }
+  } finally {
+    activeChatStreams.delete(requestId)
+  }
+})
+
+ipcMain.on('chat-completion-stream-cancel', (_event, requestId: string) => {
+  activeChatStreams.get(requestId)?.()
+  activeChatStreams.delete(requestId)
+})
+
+ipcMain.handle('exec-command', async (_event, command: string, options: ExecCommandOptions = {}) => {
+  return new Promise((resolve) => {
+    const mode: CommandMode = options.mode === 'dangerous' ? 'dangerous' : 'restricted'
+    const trimmedCommand = typeof command === 'string' ? command.trim() : ''
+    const cwdResult = resolveCommandCwd(options.cwd)
+
+    if (!trimmedCommand) {
+      resolve({ stdout: '', stderr: '命令不能为空', exitCode: -1, platform: process.platform })
+      return
+    }
+    if (trimmedCommand.length > MAX_COMMAND_LENGTH) {
+      resolve({ stdout: '', stderr: '命令过长', exitCode: -1, platform: process.platform })
+      return
+    }
+    if (!cwdResult.ok) {
+      resolve({ stdout: '', stderr: cwdResult.reason, exitCode: -1, platform: process.platform })
+      return
+    }
+
+    if (mode === 'restricted' && !isSafeReadOnlyCommand(trimmedCommand)) {
+      const needsApproval = commandNeedsApproval(trimmedCommand)
+      const tokenApproved = consumeApprovalToken(options.approvalToken, trimmedCommand, cwdResult.cwd)
+      if (!tokenApproved) {
+        resolve({
+          stdout: '',
+          stderr: '',
+          exitCode: null,
+          platform: process.platform,
+          approvalRequired: true,
+          approvalToken: createApprovalToken(trimmedCommand, cwdResult.cwd),
+          reason: needsApproval ? '该命令包含高危或写入语义，需要用户审批' : '该命令不在受限模式只读白名单中，需要用户审批'
+        })
+        return
+      }
+    }
+
+    const isWin = process.platform === 'win32'
+    let shell: string
+    let args: string[]
+
+    if (isWin) {
+      // Windows: 优先 PowerShell 7+ (pwsh)，回退 PowerShell 5.1
+      shell = 'powershell.exe'
+      args = ['-NoProfile', '-Command', `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${trimmedCommand}`]
+    } else {
+      // macOS / Linux: 使用 /bin/sh
+      shell = '/bin/sh'
+      args = ['-c', trimmedCommand]
+    }
+
+    const child = spawn(shell, args, {
+      cwd: cwdResult.cwd,
+      env: process.env
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+
+    child.stdout.on('data', (data) => { stdout = truncateOutput(stdout + data) })
+    child.stderr.on('data', (data) => { stderr = truncateOutput(stderr + data) })
+
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      child.kill()
+      resolve({ stdout, stderr: stderr || '命令执行超时（30秒）', exitCode: -1, platform: process.platform })
+    }, 30000)
+
+    child.on('close', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ stdout, stderr, exitCode: code, platform: process.platform })
+    })
+
+    child.on('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ stdout, stderr: err.message, exitCode: -1, platform: process.platform })
+    })
+  })
+})
+
+let win: BrowserWindow | null
+
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    minWidth: 800,
+    minHeight: 600,
+    titleBarStyle: 'hiddenInset',
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+
+  if (RENDERER_URL) {
+    win.loadURL(RENDERER_URL)
+  } else {
+    win.loadFile(path.join(RENDERER_DIST, 'index.html'))
+  }
+
+  win.on('closed', () => {
+    win = null
+  })
+}
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow()
+  }
+})
+
+app.whenReady().then(createWindow)

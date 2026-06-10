@@ -1,0 +1,281 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 10px);
+}
+
+:root {
+  color-scheme: light;
+  --background: 220 33% 98%;
+  --foreground: 222 47% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 10%;
+  --primary: 226 71% 48%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 25% 94%;
+  --secondary-foreground: 222 47% 13%;
+  --muted: 220 22% 94%;
+  --muted-foreground: 220 10% 43%;
+  --accent: 226 71% 96%;
+  --accent-foreground: 226 71% 33%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 145 63% 39%;
+  --success-foreground: 0 0% 100%;
+  --border: 220 18% 88%;
+  --input: 220 18% 88%;
+  --ring: 226 71% 56%;
+  --radius: 0.875rem;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: 222 47% 7%;
+  --foreground: 214 32% 91%;
+  --card: 222 39% 10%;
+  --card-foreground: 214 32% 91%;
+  --popover: 222 39% 10%;
+  --popover-foreground: 214 32% 91%;
+  --primary: 226 88% 66%;
+  --primary-foreground: 222 47% 8%;
+  --secondary: 222 26% 16%;
+  --secondary-foreground: 214 32% 91%;
+  --muted: 222 26% 16%;
+  --muted-foreground: 215 20% 69%;
+  --accent: 226 45% 18%;
+  --accent-foreground: 226 92% 82%;
+  --destructive: 0 63% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 145 60% 45%;
+  --success-foreground: 150 60% 8%;
+  --border: 222 25% 18%;
+  --input: 222 25% 20%;
+  --ring: 226 88% 72%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+
+  button,
+  textarea,
+  input,
+  select {
+    font: inherit;
+  }
+
+  ::selection {
+    @apply bg-primary/20 text-foreground;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-muted-foreground/20;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground/35;
+  }
+}
+
+@layer utilities {
+  .glass-surface {
+    @apply border border-border bg-background shadow-sm;
+  }
+
+  .rendered-surface {
+    @apply border border-border bg-card shadow-sm;
+  }
+
+  .dark .rendered-surface {
+    background:
+      linear-gradient(180deg, hsl(var(--card) / 0.98), hsl(var(--secondary) / 0.62));
+    border-color: hsl(var(--border) / 1);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.045),
+      0 12px 30px -24px hsl(0 0% 0% / 0.9);
+  }
+
+  .rendered-soft-surface {
+    @apply bg-muted/55;
+  }
+
+  .dark .rendered-soft-surface {
+    background: hsl(var(--muted) / 0.78);
+  }
+
+  .aurora-bg {
+    background:
+      linear-gradient(180deg, hsl(var(--background)), hsl(var(--muted) / 0.28)),
+      hsl(var(--background));
+  }
+
+  .animate-fade-up {
+    animation: fade-up 180ms cubic-bezier(0.2, 0, 0, 1) both;
+  }
+
+  .animate-scale-in {
+    animation: scale-in 160ms cubic-bezier(0.2, 0, 0, 1) both;
+  }
+
+  .animate-shimmer {
+    background-size: 220% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+
+  .agent-loading-orb {
+    position: relative;
+    display: grid;
+    height: 2.25rem;
+    width: 2.25rem;
+    place-items: center;
+    border-radius: 9999px;
+    background:
+      radial-gradient(circle at 35% 30%, hsl(var(--primary) / 0.26), transparent 42%),
+      linear-gradient(135deg, hsl(var(--primary) / 0.12), hsl(var(--accent) / 0.65));
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.5),
+      0 12px 26px -18px hsl(var(--primary) / 0.9);
+  }
+
+  .agent-loading-orb::before,
+  .agent-loading-orb::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: inherit;
+    border: 1px solid hsl(var(--primary) / 0.24);
+    animation: loading-ring 1.8s cubic-bezier(0.2, 0, 0, 1) infinite;
+  }
+
+  .agent-loading-orb::after {
+    animation-delay: 0.55s;
+  }
+
+  .agent-loading-dot {
+    height: 0.28rem;
+    width: 0.28rem;
+    border-radius: 9999px;
+    background: hsl(var(--primary) / 0.78);
+    animation: loading-dot 1.15s ease-in-out infinite;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -120% 0;
+  }
+}
+
+@keyframes loading-ring {
+  0% {
+    opacity: 0.65;
+    transform: scale(0.78);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+}
+
+@keyframes loading-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0) scale(0.9);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
