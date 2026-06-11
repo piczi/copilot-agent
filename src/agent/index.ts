@@ -1,3 +1,5 @@
+import { CommandMode } from '@/types'
+
 function parseThinking(content: string): { thinking: string; text: string } {
   const thinkingMatch = content.match(/<thinking>([\s\S]*?)<\/thinking>/)
   if (thinkingMatch) {
@@ -16,6 +18,7 @@ interface ChatCompletionStreamEvent {
 
 function waitForChatStream(
   message: string,
+  mode: CommandMode,
   onThinking: (chunk: string, complete: boolean) => void,
   onChunk: (chunk: string) => void,
   onReplace?: (content: string) => void,
@@ -46,6 +49,7 @@ function waitForChatStream(
     cleanup = window.electronAPI.chatCompletionStream(
       requestId,
       message,
+      { mode },
       (event: ChatCompletionStreamEvent) => {
         if (settled) return
 
@@ -91,6 +95,7 @@ function waitForChatStream(
 
 export async function executeAgentStream(
   message: string,
+  mode: CommandMode,
   onThinking: (chunk: string, complete: boolean) => void,
   onChunk: (chunk: string) => void,
   onReplace?: (content: string) => void,
@@ -105,7 +110,7 @@ export async function executeAgentStream(
   try {
     if (signal?.aborted) throw new Error('已取消')
     if (window.electronAPI.chatCompletionStream) {
-      return await waitForChatStream(message, onThinking, onChunk, onReplace, signal)
+      return await waitForChatStream(message, mode, onThinking, onChunk, onReplace, signal)
     }
 
     const content = await window.electronAPI.chatCompletion(message)

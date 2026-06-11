@@ -1,6 +1,7 @@
 import { useRef, useEffect, useMemo } from 'react'
-import { Sparkles } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { useChatStore } from '@/store/chatStore'
+import { Card } from '@/components/ui/card'
 import MessageItem from './MessageItem'
 
 const MessageList: React.FC = () => {
@@ -10,6 +11,9 @@ const MessageList: React.FC = () => {
     const conv = conversations.find((c) => c.id === activeConversationId)
     return conv?.messages || []
   }, [conversations, activeConversationId])
+  const activeAssistantMessage = messages.findLast((msg) => msg.role === 'assistant')
+  const hasActiveThinking =
+    Boolean(activeAssistantMessage?.thinking) && activeAssistantMessage?.thinkingComplete !== true
   const isLoading = useChatStore((s) => s.isLoading)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -24,22 +28,19 @@ const MessageList: React.FC = () => {
   return (
     <div className="relative flex-1 space-y-5 overflow-y-auto px-5 py-6">
       {messages.map((msg) => (
-        <MessageItem key={msg.id} message={msg} />
+        <MessageItem
+          key={msg.id}
+          message={msg}
+          isStreaming={isLoading && msg.id === activeAssistantMessage?.id}
+        />
       ))}
 
-      {isLoading && (
+      {isLoading && !hasActiveThinking && (
         <div className="flex animate-fade-up justify-start">
-          <div className="flex items-center gap-3 px-1 py-2 text-sm text-muted-foreground">
-            <div className="agent-loading-orb" aria-hidden="true">
-              <Sparkles size={15} className="relative z-10 text-primary" />
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-sm text-muted-foreground">正在思考</span>
-              <span className="agent-loading-dot" />
-              <span className="agent-loading-dot [animation-delay:160ms]" />
-              <span className="agent-loading-dot [animation-delay:320ms]" />
-            </div>
-          </div>
+          <Card className="flex items-center gap-2 border-border/60 bg-card/55 px-3 py-2 text-xs text-muted-foreground shadow-none">
+            <Loader2 size={13} className="animate-spin text-muted-foreground/70" />
+            <span>正在思考</span>
+          </Card>
         </div>
       )}
 

@@ -45,13 +45,13 @@ export const bashTool = tool(
     description: `执行系统命令行命令（PowerShell / POSIX Shell）。自动适配当前平台（Windows 使用 PowerShell，macOS/Linux 使用 /bin/sh -c）。
 
 安全规则：
-1. 受限模式下，安全只读命令可直接执行，高危命令必须经过用户审批
+1. 受限模式下，安全命令可直接执行，高风险、写入、网络请求或组合命令必须经过用户审批
 2. 危险模式下，用户已主动允许执行任意命令
 3. 不要主动建议危险命令，除非用户明确要求
 
 跨平台注意：
-- Windows 环境: 使用 PowerShell 命令（Get-ChildItem, Get-Content, Select-String, Get-Location, echo），不要按 macOS 生成命令
-- macOS/Linux: 使用 POSIX 命令（ls, cat, grep, find, pwd, echo）
+- Windows 环境: 使用 PowerShell 命令（Get-ChildItem, Get-Content, Select-String, Get-Location, Invoke-RestMethod, curl），不要按 macOS 生成命令
+- macOS/Linux: 使用 POSIX 命令（ls, cat, grep, find, pwd, echo, curl, wget）
 - 生成命令前必须依据运行平台选择语法；不要在未确认平台时套用另一种操作系统的命令`,
     schema: z.object({
       command: z.string().describe('要执行的命令行命令，如 "ls -la" 或 "dir"')

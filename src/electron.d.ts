@@ -3,9 +3,12 @@
 import { CommandMode, ExecCommandResult, LLMConfig, LLMTestResult } from '@/types'
 
 export interface ChatCompletionStreamEvent {
-  type: 'thinking' | 'thinking_done' | 'text' | 'replace_text' | 'done' | 'error'
+  type: 'thinking' | 'thinking_done' | 'text' | 'replace_text' | 'approval_required' | 'done' | 'error'
   chunk?: string
   error?: string
+  approvalId?: string
+  command?: string
+  reason?: string
 }
 
 declare global {
@@ -20,6 +23,7 @@ declare global {
       chatCompletionStream: (
         requestId: string,
         message: string,
+        options: { mode?: CommandMode },
         onEvent: (event: ChatCompletionStreamEvent) => void
       ) => (cancel?: boolean) => void
       execCommand: (

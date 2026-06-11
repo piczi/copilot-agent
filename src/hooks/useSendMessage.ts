@@ -6,6 +6,7 @@ import { Message } from '@/types'
 export function useSendMessage() {
   const inputText = useChatStore((s) => s.inputText)
   const activeConversationId = useChatStore((s) => s.activeConversationId)
+  const commandMode = useChatStore((s) => s.commandMode)
   const setInputText = useChatStore((s) => s.setInputText)
   const addMessage = useChatStore((s) => s.addMessage)
   const addStreamingMessage = useChatStore((s) => s.addStreamingMessage)
@@ -48,6 +49,7 @@ export function useSendMessage() {
       try {
         const { thinking } = await executeAgentStream(
           trimmed,
+          commandMode,
           (chunk, complete) => {
             if (complete) {
               setThinkingComplete(assistantMsgId, true, conversationId)
@@ -85,6 +87,7 @@ export function useSendMessage() {
     [
       inputText,
       activeConversationId,
+      commandMode,
       isLoading,
       addMessage,
       addStreamingMessage,

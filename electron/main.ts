@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import StoreModule from 'electron-store'
 import { SYSTEM_PROMPT } from '@/agent/prompts/system'
+import { fetchWeather } from '@/services/weather'
 const Store = (StoreModule as any).default || StoreModule
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -59,14 +60,18 @@ const approvalTokens = new Map<string, ApprovalRecord>()
 const activeChatStreams = new Map<string, () => void>()
 
 interface ChatStreamPayload {
-  type: 'thinking' | 'thinking_done' | 'text' | 'replace_text' | 'done' | 'error'
+  type: 'thinking' | 'thinking_done' | 'text' | 'replace_text' | 'approval_required' | 'done' | 'error'
   chunk?: string
   error?: string
+  approvalId?: string
+  command?: string
+  reason?: string
 }
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content?: string | null
+  reasoning_content?: string
   tool_calls?: ToolCallRequest[]
   tool_call_id?: string
 }
@@ -78,6 +83,11 @@ interface ToolCallRequest {
     name: string
     arguments: string
   }
+}
+
+interface ChatCompletionTurnResult {
+  toolCalls: ToolCallRequest[]
+  reasoning: string
 }
 
 function isProvider(value: unknown): value is LLMConfig['provider'] {
@@ -149,6 +159,16 @@ function commandNeedsApproval(command: string): boolean {
   return riskyPattern.test(normalized)
 }
 
+function restrictedCommandNeedsApproval(command: string): boolean {
+  return commandNeedsApproval(command) || !isSafeReadOnlyCommand(command)
+}
+
+function getCommandApprovalReason(command: string): string {
+  return commandNeedsApproval(command)
+    ? '该命令包含高风险、写入、网络请求或组合命令语义，需要用户审批'
+    : '该命令不在受限模式安全白名单中，需要用户审批'
+}
+
 function resolveCommandCwd(cwd?: string): { ok: true; cwd: string } | { ok: false; reason: string } {
   const appRoot = process.env.APP_ROOT || process.cwd()
   const requested = path.resolve(cwd || process.cwd())
@@ -216,6 +236,28 @@ function getRuntimePlatformInstruction(): string {
   ].join('\n')
 }
 
+function isWeatherQuery(message: string): boolean {
+  return /\bweather\b|\bforecast\b|天气|气温|温度|下雨|降雨|预报/i.test(message)
+}
+
+function cleanWeatherCityCandidate(value: string): string {
+  return value
+    .replace(/\b(in|for|at|of)\b/gi, ' ')
+    .replace(/今天|明天|后天|大后天|现在|当前|最近|未来\d*天?|请问|帮我|查询|查一下|看看|一下|的|怎么样|如何/g, '')
+    .replace(/[？?。！!,，：:\s]+/g, ' ')
+    .trim()
+}
+
+function extractWeatherCity(message: string): string {
+  const keywordMatch = /天气|气温|温度|下雨|降雨|预报|\bweather\b|\bforecast\b/i.exec(message)
+  if (!keywordMatch) return ''
+
+  const before = cleanWeatherCityCandidate(message.slice(0, keywordMatch.index))
+  if (before) return before
+
+  return cleanWeatherCityCandidate(message.slice(keywordMatch.index + keywordMatch[0].length))
+}
+
 function runLocalCommand(
   command: string,
   signal?: AbortSignal
@@ -279,6 +321,47 @@ function sendChatStreamEvent(sender: Electron.WebContents, requestId: string, pa
   if (!sender.isDestroyed()) {
     sender.send(`chat-completion-stream:${requestId}`, payload)
   }
+}
+
+function requestCommandApproval(
+  sender: Electron.WebContents,
+  requestId: string,
+  command: string,
+  reason: string,
+  signal: AbortSignal
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const approvalId = randomUUID()
+    const responseChannel = `chat-command-approval-response:${requestId}:${approvalId}`
+    const timeout = setTimeout(() => {
+      cleanup()
+      resolve(false)
+    }, APPROVAL_TTL_MS)
+
+    const cleanup = () => {
+      clearTimeout(timeout)
+      signal.removeEventListener('abort', abort)
+      ipcMain.removeAllListeners(responseChannel)
+    }
+
+    const abort = () => {
+      cleanup()
+      resolve(false)
+    }
+
+    ipcMain.once(responseChannel, (_event, approved: boolean) => {
+      cleanup()
+      resolve(Boolean(approved))
+    })
+
+    signal.addEventListener('abort', abort, { once: true })
+    sendChatStreamEvent(sender, requestId, {
+      type: 'approval_required',
+      approvalId,
+      command,
+      reason
+    })
+  })
 }
 
 function extractStreamDelta(line: string): {
@@ -408,8 +491,25 @@ const CHAT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'fetch_weather',
+      description: '获取指定城市的当前天气和未来3天天气预报。参数 city 为中文或英文城市名，如"北京"、"Shanghai"',
+      parameters: {
+        type: 'object',
+        properties: {
+          city: {
+            type: 'string',
+            description: '城市名称，如"北京"、"Shanghai"'
+          }
+        },
+        required: ['city']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'exec_bash',
-      description: '真实执行当前电脑上的只读系统命令。Windows 使用 PowerShell，macOS/Linux 使用 /bin/sh -c。只能用于读取信息，不能修改文件或安装软件。',
+      description: '真实执行当前电脑上的系统命令。Windows 使用 PowerShell，macOS/Linux 使用 /bin/sh -c。受限模式下高风险、写入、网络请求或组合命令会请求用户审批；危险模式下用户已允许直接执行。',
       parameters: {
         type: 'object',
         properties: {
@@ -424,7 +524,69 @@ const CHAT_TOOLS = [
   }
 ]
 
-async function executeExecBashTool(command: string, signal: AbortSignal): Promise<{
+async function executeFetchWeatherTool(city: string): Promise<string> {
+  const trimmedCity = city.trim()
+  if (!trimmedCity) {
+    return JSON.stringify({ error: '城市名称不能为空' })
+  }
+
+  try {
+    return JSON.stringify(await fetchWeather(trimmedCity), null, 2)
+  } catch (err) {
+    return JSON.stringify({
+      error: `获取天气失败: ${err instanceof Error ? err.message : String(err)}`
+    })
+  }
+}
+
+async function createWeatherToolMessages(message: string): Promise<ChatMessage[] | undefined> {
+  if (!isWeatherQuery(message)) return undefined
+
+  const city = extractWeatherCity(message)
+  if (!city) return undefined
+
+  const toolCallId = `fetch_weather_${randomUUID()}`
+  return [
+    { role: 'user', content: message },
+    {
+      role: 'assistant',
+      content: null,
+      tool_calls: [
+        {
+          id: toolCallId,
+          type: 'function',
+          function: {
+            name: 'fetch_weather',
+            arguments: JSON.stringify({ city })
+          }
+        }
+      ],
+      reasoning_content: `需要调用 fetch_weather 获取 "${city}" 的真实天气数据。`
+    },
+    {
+      role: 'tool',
+      tool_call_id: toolCallId,
+      content: await executeFetchWeatherTool(city)
+    }
+  ]
+}
+
+async function createInitialMessages(message: string): Promise<ChatMessage[]> {
+  const weatherToolMessages = await createWeatherToolMessages(message)
+  return [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: getRuntimePlatformInstruction() },
+    ...(weatherToolMessages || [{ role: 'user' as const, content: message }])
+  ]
+}
+
+async function executeExecBashTool(
+  command: string,
+  mode: CommandMode,
+  sender: Electron.WebContents,
+  requestId: string,
+  signal: AbortSignal
+): Promise<{
   platform: string
   command: string
   output: string
@@ -449,12 +611,16 @@ async function executeExecBashTool(command: string, signal: AbortSignal): Promis
     }
   }
 
-  if (!isSafeReadOnlyCommand(trimmedCommand) || commandNeedsApproval(trimmedCommand)) {
-    return {
-      platform: getPlatformName(),
-      command: trimmedCommand,
-      output: '该命令不在只读安全白名单中，已拒绝自动执行。',
-      exitCode: -1
+  if (mode === 'restricted' && restrictedCommandNeedsApproval(trimmedCommand)) {
+    const reason = getCommandApprovalReason(trimmedCommand)
+    const approved = await requestCommandApproval(sender, requestId, trimmedCommand, reason, signal)
+    if (!approved) {
+      return {
+        platform: getPlatformName(),
+        command: trimmedCommand,
+        output: '命令已取消：用户未批准执行。',
+        exitCode: -1
+      }
     }
   }
 
@@ -472,9 +638,11 @@ async function streamChatCompletionTurn(
   messages: ChatMessage[],
   emit: (payload: ChatStreamPayload) => void,
   contentRouter: ReturnType<typeof createContentRouter>,
-  signal: AbortSignal
-): Promise<ToolCallRequest[]> {
+  signal: AbortSignal,
+  enableTools = true
+): Promise<ChatCompletionTurnResult> {
   let reasoningStarted = false
+  let reasoning = ''
   const toolCallParts = new Map<number, ToolCallRequest>()
 
   const res = await fetch(`${normalizeBaseURL(config.baseURL)}/chat/completions`, {
@@ -486,8 +654,7 @@ async function streamChatCompletionTurn(
     body: JSON.stringify({
       model: config.model,
       messages,
-      tools: CHAT_TOOLS,
-      tool_choice: 'auto',
+      ...(enableTools ? { tools: CHAT_TOOLS, tool_choice: 'auto' } : {}),
       temperature: 0.7,
       stream: true
     }),
@@ -523,12 +690,16 @@ async function streamChatCompletionTurn(
         if (delta.done) {
           if (reasoningStarted) emit({ type: 'thinking_done' })
           contentRouter.flush()
-          return [...toolCallParts.entries()]
-            .sort(([a], [b]) => a - b)
-            .map(([, toolCall]) => toolCall)
+          return {
+            reasoning,
+            toolCalls: [...toolCallParts.entries()]
+              .sort(([a], [b]) => a - b)
+              .map(([, toolCall]) => toolCall)
+          }
         }
         if (delta.reasoning) {
           reasoningStarted = true
+          reasoning += delta.reasoning
           emit({ type: 'thinking', chunk: delta.reasoning })
         }
         if (delta.content) {
@@ -555,14 +726,18 @@ async function streamChatCompletionTurn(
 
   if (reasoningStarted) emit({ type: 'thinking_done' })
   contentRouter.flush()
-  return [...toolCallParts.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([, toolCall]) => toolCall)
+  return {
+    reasoning,
+    toolCalls: [...toolCallParts.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, toolCall]) => toolCall)
+  }
 }
 
 async function streamNativeChat(
   config: LLMConfig,
   message: string,
+  mode: CommandMode,
   sender: Electron.WebContents,
   requestId: string,
   signal: AbortSignal
@@ -586,14 +761,31 @@ async function streamNativeChat(
     emit(payload)
   }
   const contentRouter = createContentRouter(routedEmit)
-  const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'system', content: getRuntimePlatformInstruction() },
-    { role: 'user', content: message }
-  ]
+  const messages = await createInitialMessages(message)
 
   for (let turn = 0; turn < 4; turn++) {
-    const toolCalls = await streamChatCompletionTurn(config, messages, routedEmit, contentRouter, signal)
+    let turnResult: ChatCompletionTurnResult
+    try {
+      turnResult = await streamChatCompletionTurn(config, messages, routedEmit, contentRouter, signal)
+    } catch (err) {
+      messages.push({
+        role: 'system',
+        content: [
+          '上一轮模型或工具调用失败。不要把原始错误直接展示给用户。',
+          `错误摘要：${err instanceof Error ? err.message : String(err)}`,
+          '请基于已有上下文继续给出有帮助的回答；如果缺少必要数据，请用自然语言说明暂时无法完成。'
+        ].join('\n')
+      })
+      try {
+        turnResult = await streamChatCompletionTurn(config, messages, routedEmit, contentRouter, signal, false)
+      } catch {
+        routedEmit({ type: 'text', chunk: '请求暂时失败，我已经尝试恢复但仍无法完成这次回答。' })
+        emit({ type: 'done' })
+        return
+      }
+    }
+
+    const { toolCalls, reasoning } = turnResult
     if (signal.aborted) return
     if (toolCalls.length === 0) {
       emit({ type: 'done' })
@@ -603,10 +795,29 @@ async function streamNativeChat(
     messages.push({
       role: 'assistant',
       content: null,
+      reasoning_content: reasoning || undefined,
       tool_calls: toolCalls
     })
 
     for (const toolCall of toolCalls) {
+      if (toolCall.function.name === 'fetch_weather') {
+        let city = ''
+        try {
+          city = JSON.parse(toolCall.function.arguments || '{}').city || ''
+        } catch {
+          city = ''
+        }
+
+        const result = await executeFetchWeatherTool(city)
+        if (signal.aborted) return
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: result
+        })
+        continue
+      }
+
       if (toolCall.function.name !== 'exec_bash') {
         messages.push({
           role: 'tool',
@@ -628,7 +839,7 @@ async function streamNativeChat(
       const pendingText = `${baseText}${separator}${createTerminalBlock(command, getPlatformName(), '命令由大模型生成，正在真实执行...', null)}`
       routedEmit({ type: 'replace_text', chunk: pendingText })
 
-      const result = await executeExecBashTool(command, signal)
+      const result = await executeExecBashTool(command, mode, sender, requestId, signal)
       if (signal.aborted) return
 
       const finalText = `${baseText}${separator}${createTerminalBlock(result.command, result.platform, result.output, result.exitCode)}`
@@ -670,36 +881,75 @@ async function nativeChat(config: LLMConfig, message: string): Promise<string> {
     throw new Error('请先配置 Base URL')
   }
 
-  const res = await fetch(`${normalizeBaseURL(config.baseURL)}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'system', content: getRuntimePlatformInstruction() },
-        { role: 'user', content: message }
-      ],
-      temperature: 0.7
+  const messages = await createInitialMessages(message)
+
+  for (let turn = 0; turn < 4; turn++) {
+    const res = await fetch(`${normalizeBaseURL(config.baseURL)}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages,
+        tools: CHAT_TOOLS,
+        tool_choice: 'auto',
+        temperature: 0.7
+      })
     })
-  })
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`)
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`)
+    }
+
+    const data = await res.json()
+    const msg = data.choices?.[0]?.message
+    const content = msg?.content || ''
+    const reasoning = msg?.reasoning_content || ''
+    const toolCalls = Array.isArray(msg?.tool_calls) ? msg.tool_calls as ToolCallRequest[] : []
+
+    if (toolCalls.length === 0) {
+      if (!content && !reasoning) {
+        throw new Error('API 响应格式异常，未找到 content 或 reasoning_content 字段')
+      }
+      return reasoning ? `<thinking>${reasoning}</thinking>\n\n${content}` : content
+    }
+
+    messages.push({
+      role: 'assistant',
+      content: content || null,
+      reasoning_content: reasoning || undefined,
+      tool_calls: toolCalls
+    })
+
+    for (const toolCall of toolCalls) {
+      if (toolCall.function.name === 'fetch_weather') {
+        let city = ''
+        try {
+          city = JSON.parse(toolCall.function.arguments || '{}').city || ''
+        } catch {
+          city = ''
+        }
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: await executeFetchWeatherTool(city)
+        })
+        continue
+      }
+
+      messages.push({
+        role: 'tool',
+        tool_call_id: toolCall.id,
+        content: JSON.stringify({ error: `非流式模式暂不支持工具：${toolCall.function.name}` })
+      })
+    }
   }
 
-  const data = await res.json()
-  const msg = data.choices?.[0]?.message
-  const content = msg?.content || ''
-  const reasoning = msg?.reasoning_content || ''
-  if (!content && !reasoning) {
-    throw new Error('API 响应格式异常，未找到 content 或 reasoning_content 字段')
-  }
-  return reasoning ? `<thinking>${reasoning}</thinking>\n\n${content}` : content
+  throw new Error('工具调用轮次过多，已停止继续执行。')
 }
 
 ipcMain.handle('test-llm-config', async (_event, config: Partial<LLMConfig>) => {
@@ -732,12 +982,13 @@ ipcMain.handle('chat-completion', async (_event, message: string) => {
   return nativeChat(getStoredLLMConfig(), message)
 })
 
-ipcMain.on('chat-completion-stream', async (event, requestId: string, message: string) => {
+ipcMain.on('chat-completion-stream', async (event, requestId: string, message: string, options: ExecCommandOptions = {}) => {
   const controller = new AbortController()
   activeChatStreams.set(requestId, () => controller.abort())
+  const mode: CommandMode = options.mode === 'dangerous' ? 'dangerous' : 'restricted'
 
   try {
-    await streamNativeChat(getStoredLLMConfig(), message, event.sender, requestId, controller.signal)
+    await streamNativeChat(getStoredLLMConfig(), message, mode, event.sender, requestId, controller.signal)
   } catch (e) {
     if (!controller.signal.aborted) {
       sendChatStreamEvent(event.sender, requestId, {
@@ -774,8 +1025,7 @@ ipcMain.handle('exec-command', async (_event, command: string, options: ExecComm
       return
     }
 
-    if (mode === 'restricted' && !isSafeReadOnlyCommand(trimmedCommand)) {
-      const needsApproval = commandNeedsApproval(trimmedCommand)
+    if (mode === 'restricted' && restrictedCommandNeedsApproval(trimmedCommand)) {
       const tokenApproved = consumeApprovalToken(options.approvalToken, trimmedCommand, cwdResult.cwd)
       if (!tokenApproved) {
         resolve({
@@ -785,7 +1035,7 @@ ipcMain.handle('exec-command', async (_event, command: string, options: ExecComm
           platform: process.platform,
           approvalRequired: true,
           approvalToken: createApprovalToken(trimmedCommand, cwdResult.cwd),
-          reason: needsApproval ? '该命令包含高危或写入语义，需要用户审批' : '该命令不在受限模式只读白名单中，需要用户审批'
+          reason: getCommandApprovalReason(trimmedCommand)
         })
         return
       }

@@ -3,6 +3,16 @@ import { VisualBlock } from '@/types'
 const VISUAL_BLOCK_REGEX = /```visual:(\w+)\n([\s\S]*?)\n```/g
 const VISUAL_FENCE_MARKER = '```visual:'
 
+export type ParsedMessagePart =
+  | { type: 'text'; content: string }
+  | { type: 'visual'; block: VisualBlock }
+
+interface VisualCandidate {
+  start: number
+  end: number
+  block: VisualBlock
+}
+
 function getPendingVisualType(text: string): string | undefined {
   const lineStart = Math.max(text.lastIndexOf('\n'), -1) + 1
   const currentLine = text.slice(lineStart)
@@ -106,99 +116,124 @@ function hideIncompleteVisualContent(text: string): string {
   return hideIncompleteDirectVisual(hideIncompleteVisualFence(hidePendingVisualFencePrefix(text)))
 }
 
-export function parseMessage(content: string): {
-  text: string
-  visuals: VisualBlock[]
-  pendingVisualType?: string
-} {
-  const visuals: VisualBlock[] = []
-  let text = content
+function cleanupText(text: string): string {
+  return hideIncompleteVisualContent(text).replace(/\n{3,}/g, '\n\n').trim()
+}
 
-  // 1. 匹配代码块格式 ```visual:xxx
+function overlaps(candidate: VisualCandidate, accepted: VisualCandidate[]): boolean {
+  return accepted.some((item) => candidate.start < item.end && candidate.end > item.start)
+}
+
+function collectVisualCandidates(content: string): VisualCandidate[] {
+  const candidates: VisualCandidate[] = []
   let match
-  while ((match = VISUAL_BLOCK_REGEX.exec(text)) !== null) {
-    const type = match[1]
-    const jsonStr = match[2]
+
+  VISUAL_BLOCK_REGEX.lastIndex = 0
+  while ((match = VISUAL_BLOCK_REGEX.exec(content)) !== null) {
     try {
-      const data = JSON.parse(jsonStr)
-      visuals.push({ type, data })
-      text = text.replace(match[0], '')
-      VISUAL_BLOCK_REGEX.lastIndex = 0
+      candidates.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        block: { type: match[1], data: JSON.parse(match[2]) }
+      })
     } catch {
-      // skip invalid JSON
+      // Invalid visual JSON is left as regular text.
     }
   }
 
-  // 2. 匹配 ```json 代码块中包含天气数据的，自动解析为 weather_card
-  let searchStart = 0
-  while (true) {
-    const startIdx = text.indexOf('```json', searchStart)
-    if (startIdx === -1) break
-
-    const afterMarker = startIdx + 6
-    // 找到代码块结束位置
-    const endIdx = text.indexOf('```', afterMarker)
-    if (endIdx === -1) break
-
-    const jsonStr = text.slice(afterMarker, endIdx).trim()
+  const jsonFenceRegex = /```json\n?([\s\S]*?)\n?```/g
+  while ((match = jsonFenceRegex.exec(content)) !== null) {
     try {
-      const data = JSON.parse(jsonStr)
-      // 判断是否为天气数据（包含 city 和 temperature 字段）
+      const data = JSON.parse(match[1].trim())
       if (data && data.city && data.temperature !== undefined) {
-        visuals.push({ type: 'weather_card', data })
-        text = text.slice(0, startIdx) + text.slice(endIdx + 3)
-        searchStart = startIdx
-        continue
+        candidates.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          block: { type: 'weather_card', data }
+        })
       }
     } catch {
-      // skip invalid JSON
+      // Non-visual JSON stays in the markdown response.
     }
-
-    searchStart = afterMarker
   }
 
-  // 3. 匹配直接格式 visual:xxx {json}
   const directRegex = /visual:(\w+)\s+\{/g
-  while ((match = directRegex.exec(text)) !== null) {
+  while ((match = directRegex.exec(content)) !== null) {
     const type = match[1]
-    const jsonStart = match.index + match[0].length - 1 // 指向 '{'
-
-    // 找到匹配的闭合 '}'
+    const jsonStart = match.index + match[0].length - 1
     let braceCount = 1
     let i = jsonStart + 1
-    while (i < text.length && braceCount > 0) {
-      if (text[i] === '{') braceCount++
-      else if (text[i] === '}') braceCount--
+
+    while (i < content.length && braceCount > 0) {
+      if (content[i] === '{') braceCount++
+      else if (content[i] === '}') braceCount--
       i++
     }
 
-    if (braceCount === 0) {
-      const jsonStr = text.slice(jsonStart, i)
-      const fullMatch = text.slice(match.index, i)
-      text = text.replace(fullMatch, '')
-      directRegex.lastIndex = 0
+    if (braceCount !== 0) continue
 
-      try {
-        const data = JSON.parse(jsonStr)
-        visuals.push({ type, data })
-      } catch {
-        // JSON 解析失败，文本已移除，不显示原始数据给用户
-        // 为 weather_card 类型添加占位卡片
-        if (type === 'weather_card') {
-          visuals.push({
+    try {
+      candidates.push({
+        start: match.index,
+        end: i,
+        block: { type, data: JSON.parse(content.slice(jsonStart, i)) }
+      })
+    } catch {
+      if (type === 'weather_card') {
+        candidates.push({
+          start: match.index,
+          end: i,
+          block: {
             type: 'weather_card',
             data: { city: '数据解析中', condition: '未知', temperature: 0, forecast: [] }
-          })
-        }
+          }
+        })
       }
     }
   }
 
-  const pendingVisualType = getPendingVisualType(text)
-  text = hideIncompleteVisualContent(text)
+  const accepted: VisualCandidate[] = []
+  for (const candidate of candidates.sort((a, b) => a.start - b.start || a.end - b.end)) {
+    if (!overlaps(candidate, accepted)) {
+      accepted.push(candidate)
+    }
+  }
 
-  // Clean up extra newlines left from removing blocks
-  text = text.replace(/\n{3,}/g, '\n\n').trim()
+  return accepted
+}
 
-  return { text, visuals, pendingVisualType }
+export function parseMessage(content: string): {
+  text: string
+  visuals: VisualBlock[]
+  parts: ParsedMessagePart[]
+  pendingVisualType?: string
+} {
+  const candidates = collectVisualCandidates(content)
+  const parts: ParsedMessagePart[] = []
+  const visuals: VisualBlock[] = candidates.map((candidate) => candidate.block)
+  let cursor = 0
+
+  for (const candidate of candidates) {
+    const textPart = cleanupText(content.slice(cursor, candidate.start))
+    if (textPart) {
+      parts.push({ type: 'text', content: textPart })
+    }
+    parts.push({ type: 'visual', block: candidate.block })
+    cursor = candidate.end
+  }
+
+  const pendingVisualType = getPendingVisualType(content)
+  const trailingText = cleanupText(content.slice(cursor))
+  if (trailingText) {
+    parts.push({ type: 'text', content: trailingText })
+  }
+
+  const text = cleanupText(
+    parts
+      .filter((part): part is Extract<ParsedMessagePart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.content)
+      .join('\n\n')
+  )
+
+  return { text, visuals, parts, pendingVisualType }
 }

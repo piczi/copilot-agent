@@ -10,12 +10,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chatCompletionStream: (
     requestId: string,
     message: string,
+    options: { mode?: string } | undefined,
     onEvent: (event: unknown) => void
   ) => {
     const channel = `chat-completion-stream:${requestId}`
-    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => onEvent(payload)
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      if (
+        payload &&
+        typeof payload === 'object' &&
+        (payload as { type?: string }).type === 'approval_required'
+      ) {
+        const approval = payload as { approvalId?: string; command?: string; reason?: string }
+        const approved = window.confirm(`受限模式下该命令需要审批：\n\n${approval.command || ''}\n\n原因：${approval.reason || '命令存在风险'}\n\n是否继续执行？`)
+        if (approval.approvalId) {
+          ipcRenderer.send(`chat-command-approval-response:${requestId}:${approval.approvalId}`, approved)
+        }
+        return
+      }
+      onEvent(payload)
+    }
     ipcRenderer.on(channel, listener)
-    ipcRenderer.send('chat-completion-stream', requestId, message)
+    ipcRenderer.send('chat-completion-stream', requestId, message, options)
 
     return (cancel = false) => {
       ipcRenderer.removeListener(channel, listener)

@@ -8,9 +8,10 @@ import ThinkingPanel from '@/components/ThinkingPanel'
 
 interface MessageItemProps {
   message: Message
+  isStreaming?: boolean
 }
 
-const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
+const MessageItem: React.FC<MessageItemProps> = ({ message, isStreaming = false }) => {
   const isUser = message.role === 'user'
 
   if (isUser) {
@@ -23,11 +24,11 @@ const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
     )
   }
 
-  const { text, visuals, pendingVisualType } = parseMessage(message.content)
   // 如果 content 中包含 <thinking> 标签（模型通过 content 输出而非 reasoning_content），
   // 从 text 中移除它，避免重复显示
-  const thinkingMatch = text.match(/<thinking>([\s\S]*?)<\/thinking>/)
-  const cleanText = thinkingMatch ? text.replace(thinkingMatch[0], '').trim() : text
+  const thinkingMatch = message.content.match(/<thinking>([\s\S]*?)<\/thinking>/)
+  const displayContent = thinkingMatch ? message.content.replace(thinkingMatch[0], '').trim() : message.content
+  const { parts, pendingVisualType } = parseMessage(displayContent)
   const hasThinking = message.thinking !== undefined && message.thinking.length > 0
 
   return (
@@ -39,13 +40,16 @@ const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
             complete={message.thinkingComplete || false}
           />
         )}
-        {cleanText && (
-          <div className="px-1 py-1">
-            <MarkdownContent content={cleanText} />
-          </div>
+        {parts.map((part, index) =>
+          part.type === 'text' ? (
+            <div key={`text-${index}`} className="px-1 py-1">
+              <MarkdownContent content={part.content} />
+            </div>
+          ) : (
+            <VisualRenderer key={`visual-${index}`} blocks={[part.block]} />
+          )
         )}
-        {visuals && visuals.length > 0 && <VisualRenderer blocks={visuals} />}
-        {pendingVisualType && <VisualSkeleton type={pendingVisualType} />}
+        {isStreaming && pendingVisualType && <VisualSkeleton type={pendingVisualType} />}
       </div>
     </div>
   )
