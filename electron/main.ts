@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import StoreModule from 'electron-store'
 import { SYSTEM_PROMPT } from '@/agent/prompts/system'
+import { fetchCrypto, resolveCoinId } from '@/services/crypto'
 import { fetchWeather } from '@/services/weather'
 const Store = (StoreModule as any).default || StoreModule
 
@@ -23,6 +24,7 @@ process.env.VITE_PUBLIC = RENDERER_URL
 const store = new Store()
 const LLM_CONFIG_KEY = 'llm-config'
 const MAX_COMMAND_LENGTH = 2000
+const MAX_TOOL_TURNS = 10
 const MAX_OUTPUT_LENGTH = 100_000
 const APPROVAL_TTL_MS = 60_000
 
@@ -508,6 +510,23 @@ const CHAT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'fetch_crypto',
+      description: '获取加密货币行情数据。支持 bitcoin, ethereum, solana, cardano 等，也支持中文名称如"比特币"。',
+      parameters: {
+        type: 'object',
+        properties: {
+          coinId: {
+            type: 'string',
+            description: '加密货币 ID 或名称，如"bitcoin"、"ethereum"、"比特币"'
+          }
+        },
+        required: ['coinId']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'exec_bash',
       description: '真实执行当前电脑上的系统命令。Windows 使用 PowerShell，macOS/Linux 使用 /bin/sh -c。受限模式下高风险、写入、网络请求或组合命令会请求用户审批；危险模式下用户已允许直接执行。',
       parameters: {
@@ -535,6 +554,21 @@ async function executeFetchWeatherTool(city: string): Promise<string> {
   } catch (err) {
     return JSON.stringify({
       error: `获取天气失败: ${err instanceof Error ? err.message : String(err)}`
+    })
+  }
+}
+
+async function executeFetchCryptoTool(coinId: string): Promise<string> {
+  const trimmedCoinId = coinId.trim()
+  if (!trimmedCoinId) {
+    return JSON.stringify({ error: '加密货币 ID 不能为空' })
+  }
+
+  try {
+    return JSON.stringify(await fetchCrypto(resolveCoinId(trimmedCoinId)), null, 2)
+  } catch (err) {
+    return JSON.stringify({
+      error: `获取加密货币数据失败: ${err instanceof Error ? err.message : String(err)}`
     })
   }
 }
@@ -763,7 +797,7 @@ async function streamNativeChat(
   const contentRouter = createContentRouter(routedEmit)
   const messages = await createInitialMessages(message)
 
-  for (let turn = 0; turn < 4; turn++) {
+  for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
     let turnResult: ChatCompletionTurnResult
     try {
       turnResult = await streamChatCompletionTurn(config, messages, routedEmit, contentRouter, signal)
@@ -809,6 +843,24 @@ async function streamNativeChat(
         }
 
         const result = await executeFetchWeatherTool(city)
+        if (signal.aborted) return
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: result
+        })
+        continue
+      }
+
+      if (toolCall.function.name === 'fetch_crypto') {
+        let coinId = ''
+        try {
+          coinId = JSON.parse(toolCall.function.arguments || '{}').coinId || ''
+        } catch {
+          coinId = ''
+        }
+
+        const result = await executeFetchCryptoTool(coinId)
         if (signal.aborted) return
         messages.push({
           role: 'tool',
@@ -883,7 +935,7 @@ async function nativeChat(config: LLMConfig, message: string): Promise<string> {
 
   const messages = await createInitialMessages(message)
 
-  for (let turn = 0; turn < 4; turn++) {
+  for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
     const res = await fetch(`${normalizeBaseURL(config.baseURL)}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -937,6 +989,22 @@ async function nativeChat(config: LLMConfig, message: string): Promise<string> {
           role: 'tool',
           tool_call_id: toolCall.id,
           content: await executeFetchWeatherTool(city)
+        })
+        continue
+      }
+
+      if (toolCall.function.name === 'fetch_crypto') {
+        let coinId = ''
+        try {
+          coinId = JSON.parse(toolCall.function.arguments || '{}').coinId || ''
+        } catch {
+          coinId = ''
+        }
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: await executeFetchCryptoTool(coinId)
         })
         continue
       }
