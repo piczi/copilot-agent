@@ -13,8 +13,8 @@ const MessageList: React.FC = () => {
     return conv?.messages || []
   }, [conversations, activeConversationId])
   const activeAssistantMessage = messages.findLast((msg) => msg.role === 'assistant')
-  const hasActiveThinking =
-    Boolean(activeAssistantMessage?.thinking) && activeAssistantMessage?.thinkingComplete !== true
+  const hasAssistantResponseSignal =
+    Boolean(activeAssistantMessage?.thinking) || Boolean(activeAssistantMessage?.content.trim())
   const isLoading = useChatStore((s) => s.isLoading)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -39,7 +39,7 @@ const MessageList: React.FC = () => {
           />
         ))}
 
-        {isLoading && !hasActiveThinking && (
+        {isLoading && !hasAssistantResponseSignal && (
           <div className="flex justify-start">
             <Card className="flex items-center gap-2 border-border/60 bg-card/55 px-3 py-2 text-xs text-muted-foreground shadow-none">
               <Loader2 size={13} className="animate-spin text-muted-foreground/70" />

@@ -31,62 +31,44 @@ type MarkdownNode = {
 }
 
 const STREAM_CHUNK_FADE_MS = 500
-const NEW_CHUNK_ZERO_FRAME_MS = 32
 
-function getChunkOpacity(createdAt: number, now: number) {
-  const elapsed = Math.max(0, now - createdAt)
+function getCodeFadeRanges(value: string, nodeStart: number, source: string, ranges: VisibleRange[]) {
+  const valueStart = source.indexOf(value, nodeStart)
 
-  if (elapsed <= NEW_CHUNK_ZERO_FRAME_MS) {
-    return 0
-  }
+  if (valueStart === -1) return []
 
-  const progress = Math.min(1, elapsed / STREAM_CHUNK_FADE_MS)
-  return 1 - Math.pow(1 - progress, 3)
-}
+  const valueEnd = valueStart + value.length
 
-type StreamFadeSpanProps = React.ComponentPropsWithoutRef<'span'> & {
-  'data-stream-created-at'?: string
-  streamNow: number
-}
-
-const StreamFadeSpan: React.FC<StreamFadeSpanProps> = ({
-  children,
-  className = '',
-  style,
-  streamNow,
-  'data-stream-created-at': createdAtValue,
-  ...props
-}) => {
-  const createdAt = Number(createdAtValue)
-  const opacity = Number.isFinite(createdAt) ? getChunkOpacity(createdAt, streamNow) : 1
-
-  return (
-    <span
-      {...props}
-      className={`stream-chunk ${className}`.trim()}
-      style={{ ...style, opacity: Number.isFinite(opacity) ? opacity : 1 }}
-    >
-      {children}
-    </span>
-  )
+  return ranges
+    .filter((range) => range.end > valueStart && range.start < valueEnd)
+    .map((range) => ({
+      id: range.id,
+      start: Math.max(0, range.start - valueStart),
+      end: Math.min(value.length, range.end - valueStart),
+      createdAt: range.createdAt
+    }))
+    .filter((range) => range.end > range.start)
 }
 
 function createFadeNode(value: string, range: VisibleRange): MarkdownNode {
+  const elapsed = Math.min(STREAM_CHUNK_FADE_MS, Math.max(0, Date.now() - range.createdAt))
+
   return {
     type: 'emphasis',
     data: {
       hName: 'span',
       hProperties: {
-        className: 'stream-chunk',
+        className: 'stream-chunk stream-chunk-fade',
         'data-stream-chunk-id': range.id,
-        'data-stream-created-at': String(range.createdAt)
+        'data-stream-created-at': String(range.createdAt),
+        style: { animationDelay: `-${elapsed}ms` }
       }
     },
     children: [{ type: 'text', value }]
   }
 }
 
-function createStreamingFadePlugin(ranges: VisibleRange[]) {
+function createStreamingFadePlugin(content: string, ranges: VisibleRange[]) {
   return () => (tree: MarkdownNode) => {
     const visit = (node: MarkdownNode) => {
       if (!node.children) return
@@ -94,6 +76,26 @@ function createStreamingFadePlugin(ranges: VisibleRange[]) {
       const nextChildren: MarkdownNode[] = []
 
       for (const child of node.children) {
+        if ((child.type === 'code' || child.type === 'inlineCode') && typeof child.value === 'string') {
+          const nodeStart = child.position?.start?.offset
+          const codeRanges = typeof nodeStart === 'number'
+            ? getCodeFadeRanges(child.value, nodeStart, content, ranges)
+            : []
+
+          if (codeRanges.length > 0) {
+            child.data = {
+              ...child.data,
+              hProperties: {
+                ...child.data?.hProperties,
+                'data-stream-code-ranges': JSON.stringify(codeRanges)
+              }
+            }
+          }
+
+          nextChildren.push(child)
+          continue
+        }
+
         if (child.type === 'text' && typeof child.value === 'string') {
           const nodeStart = child.position?.start?.offset
           const nodeEnd = child.position?.end?.offset
@@ -159,7 +161,6 @@ const StreamingMarkdown: React.FC<StreamingMarkdownProps> = ({
   className = ''
 }) => {
   const wasStreamingRef = useRef(streaming)
-  const [streamNow, setStreamNow] = React.useState(() => Date.now())
 
   useEffect(() => {
     if (streaming) wasStreamingRef.current = true
@@ -176,23 +177,6 @@ const StreamingMarkdown: React.FC<StreamingMarkdownProps> = ({
     autoCommitMs: STREAM_CHUNK_FADE_MS
   })
 
-  useEffect(() => {
-    if (animatingChunks.length === 0) return
-
-    let frame = 0
-
-    const tick = () => {
-      setStreamNow(Date.now())
-      frame = window.requestAnimationFrame(tick)
-    }
-
-    tick()
-
-    return () => {
-      window.cancelAnimationFrame(frame)
-    }
-  }, [animatingChunks.length])
-
   const useFinalMarkdown = !trackChunks || (!streaming && (allCommitted || content.length === 0))
 
   const animatedRanges = useMemo<VisibleRange[]>(
@@ -208,7 +192,7 @@ const StreamingMarkdown: React.FC<StreamingMarkdownProps> = ({
     [animatingChunks]
   )
 
-  const fadePlugin = useMemo(() => createStreamingFadePlugin(animatedRanges), [animatedRanges])
+  const fadePlugin = useMemo(() => createStreamingFadePlugin(content, animatedRanges), [content, animatedRanges])
 
   if (useFinalMarkdown) {
     return <MarkdownContent content={content} className={className} />
@@ -219,7 +203,6 @@ const StreamingMarkdown: React.FC<StreamingMarkdownProps> = ({
       content={content}
       className={className}
       remarkPlugins={[fadePlugin]}
-      components={{ span: (props) => <StreamFadeSpan {...props} streamNow={streamNow} /> }}
     />
   )
 }

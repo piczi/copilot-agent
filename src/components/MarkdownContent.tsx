@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { PluggableList } from 'unified'
-import type { Components } from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Copy, Check } from 'lucide-react'
@@ -11,10 +10,178 @@ interface MarkdownContentProps {
   content: string
   className?: string
   remarkPlugins?: PluggableList
-  components?: Components
 }
 
-const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, code }) => {
+type CodeFadeRange = {
+  id: string
+  start: number
+  end: number
+  createdAt: number
+}
+
+type HighlightNode = {
+  type?: string
+  tagName?: string
+  properties?: {
+    className?: string[]
+    style?: React.CSSProperties
+    [key: string]: unknown
+  }
+  children?: Array<HighlightNode | string>
+  value?: string
+}
+
+type HighlightRendererOptions = {
+  rows: HighlightNode[]
+  stylesheet: Record<string, React.CSSProperties>
+  useInlineStyles: boolean
+}
+
+function parseCodeFadeRanges(value: unknown): CodeFadeRange[] {
+  if (typeof value !== 'string') return []
+
+  try {
+    const ranges = JSON.parse(value) as CodeFadeRange[]
+    return Array.isArray(ranges) ? ranges : []
+  } catch {
+    return []
+  }
+}
+
+function getFadeStyle(createdAt: number) {
+  const elapsed = Math.min(500, Math.max(0, Date.now() - createdAt))
+  return { animationDelay: `-${elapsed}ms` }
+}
+
+function getClassNameCombinations(classNames: string[]) {
+  if (classNames.length <= 1) return classNames
+
+  const combinations: string[] = []
+
+  for (let start = 0; start < classNames.length; start += 1) {
+    for (let end = start + 1; end <= classNames.length; end += 1) {
+      combinations.push(classNames.slice(start, end).join('.'))
+    }
+  }
+
+  return combinations
+}
+
+function createTokenStyle(classNames: string[], elementStyle: React.CSSProperties, stylesheet: Record<string, React.CSSProperties>) {
+  const nonTokenClassNames = classNames.filter((className) => className !== 'token')
+
+  return getClassNameCombinations(nonTokenClassNames).reduce<React.CSSProperties>(
+    (styleObject, className) => ({ ...styleObject, ...stylesheet[className] }),
+    elementStyle
+  )
+}
+
+function createHighlightProps(
+  properties: HighlightNode['properties'] = {},
+  stylesheet: Record<string, React.CSSProperties>,
+  useInlineStyles: boolean
+) {
+  const classNames = properties.className || []
+
+  if (!useInlineStyles) {
+    return {
+      ...properties,
+      className: classNames.join(' ')
+    }
+  }
+
+  const stylesheetClassNames = Object.keys(stylesheet).flatMap((selector) => selector.split('.'))
+  const visibleClassNames = classNames.filter(
+    (className) => className === 'token' || !stylesheetClassNames.includes(className)
+  )
+
+  return {
+    ...properties,
+    className: visibleClassNames.join(' ') || undefined,
+    style: createTokenStyle(classNames, properties.style || {}, stylesheet)
+  }
+}
+
+function renderTextWithFade(text: string, ranges: CodeFadeRange[], offset: number) {
+  if (ranges.length === 0 || text.length === 0) return text
+
+  const nodes: React.ReactNode[] = []
+  let cursor = 0
+
+  for (const range of ranges) {
+    const start = Math.max(cursor, Math.min(text.length, range.start - offset))
+    const end = Math.max(start, Math.min(text.length, range.end - offset))
+
+    if (start > cursor) {
+      nodes.push(text.slice(cursor, start))
+    }
+
+    if (end > start) {
+      nodes.push(
+        <span
+          key={`${range.id}-${start}-${end}`}
+          className="stream-chunk stream-chunk-fade"
+          style={getFadeStyle(range.createdAt)}
+        >
+          {text.slice(start, end)}
+        </span>
+      )
+    }
+
+    cursor = end
+  }
+
+  if (cursor < text.length) {
+    nodes.push(text.slice(cursor))
+  }
+
+  return nodes
+}
+
+function renderHighlightNode(
+  node: HighlightNode | string,
+  ranges: CodeFadeRange[],
+  offsetRef: { current: number },
+  key: React.Key,
+  stylesheet: Record<string, React.CSSProperties>,
+  useInlineStyles: boolean
+): React.ReactNode {
+  if (typeof node === 'string') {
+    const currentOffset = offsetRef.current
+    offsetRef.current += node.length
+    return renderTextWithFade(node, ranges, currentOffset)
+  }
+
+  if (typeof node.value === 'string') {
+    const currentOffset = offsetRef.current
+    offsetRef.current += node.value.length
+    return renderTextWithFade(node.value, ranges, currentOffset)
+  }
+
+  const children = node.children?.map((child, index) =>
+    renderHighlightNode(child, ranges, offsetRef, index, stylesheet, useInlineStyles)
+  )
+  const Tag = (node.tagName || 'span') as keyof JSX.IntrinsicElements
+  const props = createHighlightProps(node.properties, stylesheet, useInlineStyles)
+
+  return React.createElement(Tag, { ...props, key }, children)
+}
+
+function createCodeRenderer(ranges: CodeFadeRange[]) {
+  return ({ rows, stylesheet, useInlineStyles }: HighlightRendererOptions) => {
+    const offsetRef = { current: 0 }
+
+    return rows.map((row, index) =>
+      renderHighlightNode(row, ranges, offsetRef, index, stylesheet, useInlineStyles)
+    )
+  }
+}
+
+const CodeBlock: React.FC<{ language: string; code: string; fadeRanges?: CodeFadeRange[] }> = ({
+  language,
+  code,
+  fadeRanges = []
+}) => {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -60,6 +227,7 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
             minWidth: '2.5em',
             paddingRight: '1em',
           }}
+          renderer={fadeRanges.length > 0 ? createCodeRenderer(fadeRanges) : undefined}
         >
           {code}
         </SyntaxHighlighter>
@@ -71,8 +239,7 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
 const MarkdownContent: React.FC<MarkdownContentProps> = ({
   content,
   className = '',
-  remarkPlugins = [],
-  components = {}
+  remarkPlugins = []
 }) => {
   return (
     <div className={className}>
@@ -115,17 +282,26 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
           ),
 
           // 行内代码
-          code: ({ children, className: codeClassName }) => {
+          code: ({ children, className: codeClassName, ...codeProps }) => {
             const isInline = !codeClassName
+            const fadeRanges = parseCodeFadeRanges(codeProps['data-stream-code-ranges'])
             if (isInline) {
+              const inlineCode = String(children || '')
               return (
                 <code className="rounded-md border border-border bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
-                  {children}
+                  {renderTextWithFade(inlineCode, fadeRanges, 0)}
                 </code>
               )
             }
             // 代码块在 pre 中处理
-            return <code className="font-mono text-xs text-slate-300">{children}</code>
+            return (
+              <code
+                className="font-mono text-xs text-slate-300"
+                data-stream-code-ranges={codeProps['data-stream-code-ranges']}
+              >
+                {children}
+              </code>
+            )
           },
 
           // 代码块
@@ -139,9 +315,14 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
               return <pre>{children}</pre>
             }
 
-            const codeProps = codeElement.props as { className?: string; children?: React.ReactNode }
+            const codeProps = codeElement.props as {
+              className?: string
+              children?: React.ReactNode
+              'data-stream-code-ranges'?: string
+            }
             const match = /language-(\w+)/.exec(codeProps?.className || '')
             const language = match ? match[1] : ''
+            const fadeRanges = parseCodeFadeRanges(codeProps?.['data-stream-code-ranges'])
 
             let code: string
             const rawChildren = codeProps?.children
@@ -153,7 +334,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
               code = String(rawChildren || '').replace(/\n$/, '')
             }
 
-            return <CodeBlock language={language} code={code} />
+            return <CodeBlock language={language} code={code} fadeRanges={fadeRanges} />
           },
 
           // 表格
@@ -179,7 +360,6 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
           img: ({ src, alt }) => (
             <img src={src} alt={alt || ''} className="my-2 max-w-full rounded-md border border-border" loading="lazy" />
           ),
-          ...components
         }}
       >
         {content}
