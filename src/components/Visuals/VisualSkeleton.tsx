@@ -7,13 +7,13 @@ const chartTypes = new Set(['line_chart', 'bar_chart', 'pie_chart'])
 const VisualSkeleton: React.FC<VisualSkeletonProps> = ({ type }) => {
   if (type === 'weather_card') {
     return (
-      <div className="rendered-surface mx-auto my-4 max-w-sm animate-pulse rounded-2xl p-5">
+      <div className="rendered-surface mx-auto my-4 max-w-sm animate-pulse rounded-md p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="space-y-2">
             <div className="h-5 w-24 rounded rendered-soft-surface" />
             <div className="h-3 w-16 rounded rendered-soft-surface" />
           </div>
-          <div className="h-12 w-12 rounded-xl rendered-soft-surface" />
+          <div className="h-12 w-12 rounded-md rendered-soft-surface" />
         </div>
         <div className="mb-4 flex items-end gap-3">
           <div className="h-12 w-20 rounded rendered-soft-surface" />
@@ -27,7 +27,7 @@ const VisualSkeleton: React.FC<VisualSkeletonProps> = ({ type }) => {
           {[0, 1, 2, 3].map((item) => (
             <div key={item} className="space-y-2">
               <div className="mx-auto h-3 w-10 rounded rendered-soft-surface" />
-              <div className="mx-auto h-6 w-6 rounded-full rendered-soft-surface" />
+              <div className="mx-auto h-6 w-6 rounded-md rendered-soft-surface" />
               <div className="mx-auto h-3 w-12 rounded rendered-soft-surface" />
             </div>
           ))}
@@ -38,7 +38,7 @@ const VisualSkeleton: React.FC<VisualSkeletonProps> = ({ type }) => {
 
   if (type && chartTypes.has(type)) {
     return (
-      <div className="rendered-surface my-4 animate-pulse rounded-2xl p-4">
+      <div className="rendered-surface my-4 animate-pulse rounded-md p-4">
         <div className="mx-auto mb-6 h-4 w-32 rounded rendered-soft-surface" />
         <div className="flex h-64 items-end gap-3 border-b border-l border-border px-3 pb-3">
           {[45, 60, 36, 72, 54, 84, 64, 78].map((height, index) => (
@@ -57,7 +57,7 @@ const VisualSkeleton: React.FC<VisualSkeletonProps> = ({ type }) => {
   }
 
   return (
-    <div className="rendered-surface my-4 animate-pulse rounded-2xl p-4">
+    <div className="rendered-surface my-4 animate-pulse rounded-md p-4">
       <div className="mb-3 h-4 w-28 rounded rendered-soft-surface" />
       <div className="space-y-2">
         <div className="h-3 w-full rounded rendered-soft-surface" />

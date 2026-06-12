@@ -2,7 +2,6 @@ import { Conversation } from '@/types'
 
 const STORAGE_KEY = 'conversations'
 const MAX_CONVERSATIONS = 50
-const MAX_MESSAGES_PER_CONV = 50
 const MAX_TITLE_LENGTH = 80
 const MAX_MESSAGE_CONTENT_LENGTH = 40_000
 const MAX_THINKING_LENGTH = 40_000
@@ -46,7 +45,6 @@ function sanitizeConversation(value: unknown): Conversation | null {
   const messages = rawMessages
     .map(sanitizeMessage)
     .filter((message): message is Conversation['messages'][number] => Boolean(message))
-    .slice(-MAX_MESSAGES_PER_CONV)
 
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : crypto.randomUUID(),
@@ -68,11 +66,7 @@ function truncateConversations(conversations: Conversation[]): Conversation[] {
     .filter((conversation): conversation is Conversation => Boolean(conversation))
     .sort(sortConversationsByActivity)
   const truncated = sorted.slice(0, MAX_CONVERSATIONS)
-  // 截断每个会话的消息
-  return truncated.map((conv) => ({
-    ...conv,
-    messages: conv.messages.slice(-MAX_MESSAGES_PER_CONV)
-  }))
+  return truncated
 }
 
 export async function loadConversations(): Promise<Conversation[]> {

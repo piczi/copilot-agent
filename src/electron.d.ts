@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { CommandMode, ExecCommandResult, LLMConfig, LLMTestResult } from '@/types'
+import { ChatHistoryMessage, CommandMode, ExecCommandResult, LLMConfig, LLMTestResult } from '@/types'
 
 export interface ChatCompletionStreamEvent {
   type: 'thinking' | 'thinking_done' | 'text' | 'replace_text' | 'approval_required' | 'done' | 'error'
@@ -19,11 +19,14 @@ declare global {
       getLLMConfig: () => Promise<LLMConfig>
       saveLLMConfig: (config: LLMConfig) => Promise<void>
       testLLMConfig: (config: LLMConfig) => Promise<LLMTestResult>
-      chatCompletion: (message: string) => Promise<string>
+      chatCompletion: (
+        message: string,
+        options?: { history?: ChatHistoryMessage[] }
+      ) => Promise<string>
       chatCompletionStream: (
         requestId: string,
         message: string,
-        options: { mode?: CommandMode },
+        options: { mode?: CommandMode; history?: ChatHistoryMessage[] },
         onEvent: (event: ChatCompletionStreamEvent) => void
       ) => (cancel?: boolean) => void
       execCommand: (

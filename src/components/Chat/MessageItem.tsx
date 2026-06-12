@@ -16,8 +16,8 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, isStreaming = false 
 
   if (isUser) {
     return (
-      <div className="flex animate-fade-up justify-end">
-        <div className="max-w-[78%] rounded-2xl rounded-tr-md border border-border bg-secondary px-4 py-3 text-secondary-foreground shadow-sm">
+      <div className="flex animate-message-in justify-end">
+        <div className="max-w-[78%] rounded-md rounded-tr-sm border border-border bg-secondary px-4 py-3 text-secondary-foreground shadow-sm">
           <MarkdownContent content={message.content} />
         </div>
       </div>
@@ -32,7 +32,7 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, isStreaming = false 
   const hasThinking = message.thinking !== undefined && message.thinking.length > 0
 
   return (
-    <div className="flex animate-fade-up justify-start">
+    <div className="flex animate-message-in justify-start">
       <div className="min-w-0 max-w-[82%] space-y-3">
         {hasThinking && (
           <ThinkingPanel

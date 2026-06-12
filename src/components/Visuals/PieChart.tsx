@@ -65,7 +65,7 @@ const PieChart: React.FC<PieChartProps> = ({ title, data }) => {
   }
 
   return (
-    <div className="rendered-surface my-4 rounded-2xl p-4">
+    <div className="rendered-surface my-4 rounded-md p-4">
       <ReactECharts option={option} style={{ height: 320 }} />
     </div>
   )

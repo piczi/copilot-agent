@@ -26,12 +26,12 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
   const displayLanguage = language || 'text'
 
   return (
-    <div className="my-3 overflow-hidden rounded-2xl border border-border bg-[#111827] shadow-sm dark:border-slate-700 dark:shadow-[0_12px_30px_-24px_rgba(0,0,0,0.9)]">
+    <div className="my-3 overflow-hidden rounded-md border border-border bg-[#111827] shadow-sm dark:border-slate-700 dark:shadow-[0_12px_30px_-24px_rgba(0,0,0,0.9)]">
       <div className="flex items-center justify-between border-b border-white/10 bg-white/5 px-3 py-2">
         <span className="font-mono text-xs text-slate-300">{displayLanguage}</span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+          className="flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
         >
           {copied ? <Check size={12} /> : <Copy size={12} />}
           {copied ? '已复制' : '复制'}
@@ -93,14 +93,14 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, className = 
 
           // 引用块
           blockquote: ({ children }) => (
-            <blockquote className="my-2 rounded-r-xl border-l-4 border-primary/40 bg-muted/60 py-2 pl-3 text-muted-foreground italic">
+            <blockquote className="my-2 rounded-r-md border-l-4 border-primary/40 bg-muted/60 py-2 pl-3 text-muted-foreground italic">
               {children}
             </blockquote>
           ),
 
           // 链接
           a: ({ children, href }) => (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-4 transition-colors hover:underline">
+            <a href={href} target="_blank" rel="noopener noreferrer" className="cursor-pointer text-primary underline-offset-4 transition-colors hover:underline">
               {children}
             </a>
           ),
@@ -149,7 +149,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, className = 
 
           // 表格
           table: ({ children }) => (
-            <div className="rendered-surface my-3 overflow-x-auto rounded-2xl">
+            <div className="rendered-surface my-3 overflow-x-auto rounded-md">
               <table className="w-full overflow-hidden text-sm">
                 {children}
               </table>
@@ -168,7 +168,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, className = 
 
           // 图片
           img: ({ src, alt }) => (
-            <img src={src} alt={alt || ''} className="my-2 max-w-full rounded-xl border border-border" loading="lazy" />
+            <img src={src} alt={alt || ''} className="my-2 max-w-full rounded-md border border-border" loading="lazy" />
           ),
         }}
       >

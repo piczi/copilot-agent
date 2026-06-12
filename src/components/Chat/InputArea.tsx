@@ -58,7 +58,7 @@ const InputArea: React.FC = () => {
   }
 
   return (
-    <div className="relative border-t border-border bg-background px-5 py-3">
+    <div className="relative bg-background px-5 py-3">
       <div className="relative mx-auto max-w-4xl">
         <div className="relative">
           <Textarea
@@ -68,20 +68,20 @@ const InputArea: React.FC = () => {
             onKeyDown={handleKeyDown}
             placeholder="输入你的问题，Shift + Enter 换行..."
             disabled={isLoading}
-            className="min-h-[88px] max-h-[180px] rounded-xl border-border bg-muted/25 pb-14 pr-16 shadow-none transition-[background-color,border-color] duration-200 ease-out focus-visible:bg-background focus-visible:ring-0"
+            className="min-h-[88px] max-h-[180px] rounded-md border-border bg-muted/20 pb-14 pr-16 shadow-none transition-[background-color,border-color,box-shadow] duration-150 ease-out focus-visible:bg-background focus-visible:ring-2 focus-visible:ring-ring/15"
           />
           <Button
             onClick={isLoading ? handleStop : handleSend}
             disabled={!isLoading && !text.trim()}
-            size="icon"
-            className="absolute bottom-3 right-3 h-9 w-9 rounded-lg shadow-none transition-transform duration-200 ease-out active:scale-95"
+            size="icon-sm"
+            className="absolute bottom-3 right-3 h-8 w-8 rounded-md shadow-none"
             aria-label={isLoading ? '停止生成' : '发送消息'}
           >
             {isLoading ? <Square size={14} fill="currentColor" /> : <Send size={14} />}
           </Button>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-2 text-[11px] text-muted-foreground">
-          <div className="flex rounded-lg border border-border bg-muted/30 p-0.5">
+          <div className="flex rounded-md border border-border bg-muted/30 p-0.5">
             {modes.map(({ value, label, icon: Icon }) => {
               const active = commandMode === value
               return (
@@ -89,7 +89,7 @@ const InputArea: React.FC = () => {
                   key={value}
                   type="button"
                   onClick={() => setCommandMode(value)}
-                  className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 transition-colors ${
+                  className={`inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-sm px-2.5 transition-[background-color,color] duration-150 ${
                     active
                       ? value === 'dangerous'
                         ? 'bg-destructive/15 text-destructive'

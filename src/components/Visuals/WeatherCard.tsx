@@ -60,13 +60,13 @@ const WeatherCard: React.FC<WeatherCardProps> = ({
   const ConditionIcon = getConditionIcon(condition)
 
   return (
-    <div className="rendered-surface relative mx-auto my-4 max-w-sm overflow-hidden rounded-2xl p-5">
+    <div className="rendered-surface relative mx-auto my-4 max-w-sm overflow-hidden rounded-md p-5">
       <div className="relative mb-4 flex items-center justify-between">
         <div>
           <h3 className="text-lg font-bold text-foreground">{city}</h3>
           <p className="text-sm text-muted-foreground">{condition}</p>
         </div>
-        <div className="rendered-soft-surface flex h-14 w-14 items-center justify-center rounded-xl text-primary ring-1 ring-border/70">
+        <div className="rendered-soft-surface flex h-14 w-14 items-center justify-center rounded-md text-primary ring-1 ring-border/70">
           <ConditionIcon size={30} />
         </div>
       </div>
@@ -77,11 +77,11 @@ const WeatherCard: React.FC<WeatherCardProps> = ({
       </div>
 
       <div className="relative mb-4 flex gap-3 text-sm text-muted-foreground">
-        <div className="rendered-soft-surface flex items-center gap-1.5 rounded-full px-3 py-1.5 ring-1 ring-border/50">
+        <div className="rendered-soft-surface flex items-center gap-1.5 rounded-md px-3 py-1.5 ring-1 ring-border/50">
           <Droplets size={14} className="text-primary" />
           <span>{humidity}%</span>
         </div>
-        <div className="rendered-soft-surface flex items-center gap-1.5 rounded-full px-3 py-1.5 ring-1 ring-border/50">
+        <div className="rendered-soft-surface flex items-center gap-1.5 rounded-md px-3 py-1.5 ring-1 ring-border/50">
           <Wind size={14} className="text-primary" />
           <span>{windSpeed} km/h</span>
         </div>

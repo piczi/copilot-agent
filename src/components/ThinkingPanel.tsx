@@ -24,10 +24,10 @@ const ThinkingPanel: React.FC<ThinkingPanelProps> = ({ thinking, complete }) => 
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/30"
+        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/30"
       >
         {complete ? (
-          <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/45" aria-hidden="true" />
+          <span className="h-1.5 w-1.5 rounded-sm bg-muted-foreground/45" aria-hidden="true" />
         ) : (
           <Loader size={12} className="animate-spin text-muted-foreground/70" />
         )}
@@ -39,7 +39,7 @@ const ThinkingPanel: React.FC<ThinkingPanelProps> = ({ thinking, complete }) => 
       </button>
 
       {expanded && (
-        <div className="animate-fade-up border-t border-border/50 bg-muted/20 px-3 py-2.5">
+        <div className="animate-slide-in-from-top border-t border-border/50 bg-muted/20 px-3 py-2.5">
           <div className="max-h-52 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-5 text-muted-foreground/85">
             {thinking}
           </div>

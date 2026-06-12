@@ -14,7 +14,7 @@ const VisualRenderer: React.FC<VisualRendererProps> = ({ blocks }) => {
         const Component = visualRegistry[block.type]
         if (!Component) {
           return (
-            <div key={index} className="rendered-surface rounded-2xl p-4 text-sm text-muted-foreground">
+            <div key={index} className="rendered-surface animate-message-in rounded-md p-4 text-sm text-muted-foreground">
               <div className="mb-2 flex items-center gap-2">
                 <Sparkles size={16} className="text-primary" />
                 <span className="font-medium">可视化卡片</span>
@@ -24,7 +24,7 @@ const VisualRenderer: React.FC<VisualRendererProps> = ({ blocks }) => {
           )
         }
         return (
-          <div key={index}>
+          <div key={index} className="animate-message-in">
             <Component {...block.data} />
           </div>
         )

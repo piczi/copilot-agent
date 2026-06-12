@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, CheckCircle, Moon, Settings, Sun } from 'lucide-react'
+import { AlertCircle, Bot, CheckCircle, Moon, PanelLeftClose, PanelLeftOpen, Settings, SquarePen, Sun } from 'lucide-react'
 import ChatContainer from '@/components/Chat/ChatContainer'
 import Sidebar from '@/components/Sidebar/Sidebar'
 import { useChatStore } from '@/store/chatStore'
 import { LLMConfig } from '@/types'
 import { getLLMConfig, saveLLMConfig, testLLMConfig } from '@/agent/config'
 import { resetAgent } from '@/agent'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -16,6 +15,19 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 
 const PROVIDERS = [
@@ -27,6 +39,7 @@ const PROVIDERS = [
 ]
 
 function App() {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'light'
@@ -46,6 +59,7 @@ function App() {
 
   const loadConversations = useChatStore((s) => s.loadConversations)
   const persistConversations = useChatStore((s) => s.persistConversations)
+  const createConversation = useChatStore((s) => s.createConversation)
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
@@ -127,39 +141,109 @@ function App() {
     setTestStatus(null)
   }
 
+  const handleNewChat = () => {
+    const activeId = useChatStore.getState().activeConversationId
+    const conversations = useChatStore.getState().conversations
+    const activeConv = conversations.find((c) => c.id === activeId)
+    // 如果当前对话已经是空的，不再创建新对话
+    if (activeConv && activeConv.messages.length === 0) {
+      return
+    }
+    createConversation()
+    persistConversations()
+  }
+
   const selectedProvider = PROVIDERS.find((p) => p.value === config.provider)
+  const toolbarButtonClass = 'h-[26px] w-[26px] rounded-sm text-muted-foreground transition-[background-color,color] hover:bg-muted hover:text-foreground'
+
+  const settingsControl = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={toolbarButtonClass}
+          aria-label="打开设置"
+          title="设置"
+        >
+          <Settings size={13} strokeWidth={1.85} />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-52">
+        <DropdownMenuLabel>设置</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            {theme === 'dark' ? <Moon size={14} /> : <Sun size={14} />}
+            主题
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DropdownMenuRadioGroup
+              value={theme}
+              onValueChange={(value) => setTheme(value as 'light' | 'dark')}
+            >
+              <DropdownMenuRadioItem value="light">
+                <Sun size={14} />
+                亮色
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="dark">
+                <Moon size={14} />
+                暗色
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <Bot size={14} />
+            模型设置
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-56">
+            <DropdownMenuLabel>{selectedProvider?.label || '未配置'}</DropdownMenuLabel>
+            <DropdownMenuItem
+              onSelect={() => setShowSettings(true)}
+            >
+              <Settings size={14} />
+              配置模型
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
 
   return (
     <div className="aurora-bg flex h-screen flex-col overflow-hidden text-foreground">
-      <header className="z-20 flex h-11 items-center justify-between border-b border-border bg-background/95 px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <h1 className="truncate text-sm font-medium tracking-tight">Copilot Agent</h1>
-          <Badge variant="outline" className="hidden h-5 border-border bg-transparent px-2 text-[11px] font-normal text-muted-foreground sm:inline-flex">
-            {selectedProvider?.label || '未配置'}
-          </Badge>
-        </div>
-        <div className="flex items-center gap-1">
+      <div className="window-drag z-20 flex h-8 shrink-0 items-center border-b border-border bg-background/95 px-1.5">
+        <div className="window-no-drag flex items-center gap-1">
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
-            aria-label={theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
+            className={toolbarButtonClass}
+            onClick={() => setSidebarCollapsed((value) => !value)}
+            aria-label={sidebarCollapsed ? '展开聊天历史' : '收起聊天历史'}
+            title={sidebarCollapsed ? '展开聊天历史' : '收起聊天历史'}
           >
-            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            {sidebarCollapsed
+              ? <PanelLeftOpen size={14} strokeWidth={1.8} />
+              : <PanelLeftClose size={14} strokeWidth={1.8} />}
           </Button>
           <Button
+            onClick={handleNewChat}
             variant="ghost"
             size="icon-sm"
-            onClick={() => setShowSettings(true)}
-            aria-label="打开设置"
+            className={toolbarButtonClass}
+            aria-label="新对话"
+            title="新对话"
           >
-            <Settings size={18} />
+            <SquarePen size={14} strokeWidth={1.8} />
           </Button>
+          {settingsControl}
         </div>
-      </header>
+      </div>
 
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <Sidebar collapsed={sidebarCollapsed} />
         <main className="min-w-0 flex-1 overflow-hidden bg-background">
           <ChatContainer />
         </main>
@@ -179,7 +263,7 @@ function App() {
                 id="provider"
                 value={config.provider}
                 onChange={(e) => handleProviderChange(e.target.value as LLMConfig['provider'])}
-                className="h-10 w-full rounded-lg border border-input bg-background/70 px-3 text-sm shadow-sm outline-none transition-all focus:border-ring focus:ring-2 focus:ring-ring/20"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm outline-none transition-[background-color,border-color,box-shadow] duration-150 focus:border-ring focus:ring-2 focus:ring-ring/20"
               >
                 {PROVIDERS.map((p) => (
                   <option key={p.value} value={p.value}>{p.label}</option>
@@ -223,7 +307,7 @@ function App() {
           </div>
 
           {testStatus && (
-            <div className={`flex items-start gap-2 rounded-xl border p-3 text-sm ${
+            <div className={`animate-fade-up flex items-start gap-2 rounded-md border p-3 text-sm ${
               testStatus.ok
                 ? 'border-success/25 bg-success/10 text-success'
                 : 'border-destructive/25 bg-destructive/10 text-destructive'

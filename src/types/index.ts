@@ -9,6 +9,11 @@ export interface LLMConfig {
 
 export type CommandMode = 'restricted' | 'dangerous'
 
+export interface ChatHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export interface ExecCommandResult {
   stdout: string
   stderr: string

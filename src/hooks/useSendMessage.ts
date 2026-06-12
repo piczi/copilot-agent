@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { executeAgentStream } from '@/agent'
 import { useChatStore } from '@/store/chatStore'
-import { Message } from '@/types'
+import { ChatHistoryMessage, Message } from '@/types'
 
 export function useSendMessage() {
   const inputText = useChatStore((s) => s.inputText)
@@ -24,6 +24,19 @@ export function useSendMessage() {
       const trimmed = (messageText ?? inputText).trim()
       if (!trimmed || isLoading) return
       const conversationId = activeConversationId
+      const conversation = useChatStore
+        .getState()
+        .conversations
+        .find((item) => item.id === conversationId)
+      const history: ChatHistoryMessage[] = (conversation?.messages || [])
+        .filter((message): message is Message & ChatHistoryMessage =>
+          (message.role === 'user' || message.role === 'assistant') &&
+          message.content.trim().length > 0
+        )
+        .map((message) => ({
+          role: message.role,
+          content: message.content
+        }))
 
       const userMsg: Message = {
         id: crypto.randomUUID(),
@@ -50,6 +63,7 @@ export function useSendMessage() {
         const { thinking } = await executeAgentStream(
           trimmed,
           commandMode,
+          history,
           (chunk, complete) => {
             if (complete) {
               setThinkingComplete(assistantMsgId, true, conversationId)

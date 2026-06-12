@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
@@ -43,6 +43,7 @@ interface ExecCommandOptions {
   cwd?: string
   mode?: CommandMode
   approvalToken?: string
+  history?: ChatHistoryMessage[]
 }
 
 interface ApprovalRecord {
@@ -76,6 +77,11 @@ interface ChatMessage {
   reasoning_content?: string
   tool_calls?: ToolCallRequest[]
   tool_call_id?: string
+}
+
+interface ChatHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
 }
 
 interface ToolCallRequest {
@@ -605,11 +611,32 @@ async function createWeatherToolMessages(message: string): Promise<ChatMessage[]
   ]
 }
 
-async function createInitialMessages(message: string): Promise<ChatMessage[]> {
+function sanitizeHistoryMessages(history: unknown): ChatMessage[] {
+  if (!Array.isArray(history)) return []
+
+  return history
+    .map((item): ChatMessage | null => {
+      if (!item || typeof item !== 'object') return null
+      const raw = item as Record<string, unknown>
+      if (raw.role !== 'user' && raw.role !== 'assistant') return null
+      const content = typeof raw.content === 'string' ? raw.content.trim() : ''
+      if (!content) return null
+
+      return {
+        role: raw.role,
+        content
+      }
+    })
+    .filter((message): message is ChatMessage => Boolean(message))
+}
+
+async function createInitialMessages(message: string, history: ChatHistoryMessage[] = []): Promise<ChatMessage[]> {
   const weatherToolMessages = await createWeatherToolMessages(message)
+  const historyMessages = sanitizeHistoryMessages(history)
   return [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'system', content: getRuntimePlatformInstruction() },
+    ...historyMessages,
     ...(weatherToolMessages || [{ role: 'user' as const, content: message }])
   ]
 }
@@ -772,6 +799,7 @@ async function streamNativeChat(
   config: LLMConfig,
   message: string,
   mode: CommandMode,
+  history: ChatHistoryMessage[],
   sender: Electron.WebContents,
   requestId: string,
   signal: AbortSignal
@@ -795,7 +823,7 @@ async function streamNativeChat(
     emit(payload)
   }
   const contentRouter = createContentRouter(routedEmit)
-  const messages = await createInitialMessages(message)
+  const messages = await createInitialMessages(message, history)
 
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
     let turnResult: ChatCompletionTurnResult
@@ -925,7 +953,7 @@ ipcMain.handle('save-llm-config', (_event, config: Partial<LLMConfig>) => {
   store.set(LLM_CONFIG_KEY, cleanConfig(config, existing))
 })
 
-async function nativeChat(config: LLMConfig, message: string): Promise<string> {
+async function nativeChat(config: LLMConfig, message: string, history: ChatHistoryMessage[] = []): Promise<string> {
   if (!config.apiKey) {
     throw new Error('请先配置 LLM API Key（点击左上角设置图标）')
   }
@@ -933,7 +961,7 @@ async function nativeChat(config: LLMConfig, message: string): Promise<string> {
     throw new Error('请先配置 Base URL')
   }
 
-  const messages = await createInitialMessages(message)
+  const messages = await createInitialMessages(message, history)
 
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
     const res = await fetch(`${normalizeBaseURL(config.baseURL)}/chat/completions`, {
@@ -1046,17 +1074,18 @@ ipcMain.handle('test-llm-config', async (_event, config: Partial<LLMConfig>) => 
   }
 })
 
-ipcMain.handle('chat-completion', async (_event, message: string) => {
-  return nativeChat(getStoredLLMConfig(), message)
+ipcMain.handle('chat-completion', async (_event, message: string, options: ExecCommandOptions = {}) => {
+  return nativeChat(getStoredLLMConfig(), message, options.history || [])
 })
 
 ipcMain.on('chat-completion-stream', async (event, requestId: string, message: string, options: ExecCommandOptions = {}) => {
   const controller = new AbortController()
   activeChatStreams.set(requestId, () => controller.abort())
   const mode: CommandMode = options.mode === 'dangerous' ? 'dangerous' : 'restricted'
+  const history = Array.isArray(options.history) ? options.history : []
 
   try {
-    await streamNativeChat(getStoredLLMConfig(), message, mode, event.sender, requestId, controller.signal)
+    await streamNativeChat(getStoredLLMConfig(), message, mode, history, event.sender, requestId, controller.signal)
   } catch (e) {
     if (!controller.signal.aborted) {
       sendChatStreamEvent(event.sender, requestId, {
@@ -1163,6 +1192,12 @@ ipcMain.handle('exec-command', async (_event, command: string, options: ExecComm
 
 let win: BrowserWindow | null
 
+function hideWindowMenu(window: BrowserWindow) {
+  window.setMenu(null)
+  window.setAutoHideMenuBar(true)
+  window.setMenuBarVisibility(false)
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1200,
@@ -1170,12 +1205,14 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false
     }
   })
+  hideWindowMenu(win)
 
   if (RENDERER_URL) {
     win.loadURL(RENDERER_URL)
@@ -1187,6 +1224,10 @@ function createWindow() {
     win = null
   })
 }
+
+app.on('browser-window-created', (_event, window) => {
+  hideWindowMenu(window)
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -1200,4 +1241,7 @@ app.on('activate', () => {
   }
 })
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  Menu.setApplicationMenu(null)
+  createWindow()
+})

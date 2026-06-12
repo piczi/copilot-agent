@@ -6,11 +6,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLLMConfig: () => ipcRenderer.invoke('get-llm-config'),
   saveLLMConfig: (config: unknown) => ipcRenderer.invoke('save-llm-config', config),
   testLLMConfig: (config: unknown) => ipcRenderer.invoke('test-llm-config', config),
-  chatCompletion: (message: string) => ipcRenderer.invoke('chat-completion', message),
+  chatCompletion: (message: string, options?: unknown) => ipcRenderer.invoke('chat-completion', message, options),
   chatCompletionStream: (
     requestId: string,
     message: string,
-    options: { mode?: string } | undefined,
+    options: { mode?: string; history?: unknown[] } | undefined,
     onEvent: (event: unknown) => void
   ) => {
     const channel = `chat-completion-stream:${requestId}`
