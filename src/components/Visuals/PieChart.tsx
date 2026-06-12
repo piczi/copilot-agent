@@ -13,6 +13,8 @@ const PieChart: React.FC<PieChartProps> = ({ title, data }) => {
   const theme = getChartTheme()
   const option = {
     backgroundColor: 'transparent',
+    animationDuration: 720,
+    animationEasing: 'cubicOut',
     title: {
       text: title,
       left: 'center',
@@ -38,6 +40,7 @@ const PieChart: React.FC<PieChartProps> = ({ title, data }) => {
         radius: ['40%', '65%'],
         center: ['50%', '45%'],
         avoidLabelOverlap: true,
+        animationDelay: (index: number) => index * 45,
         itemStyle: {
           borderRadius: 6,
           borderColor: theme.card,

@@ -4,6 +4,7 @@ import { parseMessage } from '@/utils/parseMessage'
 import VisualRenderer from '@/components/Visuals/VisualRenderer'
 import VisualSkeleton from '@/components/Visuals/VisualSkeleton'
 import MarkdownContent from '@/components/MarkdownContent'
+import StreamingMarkdown from '@/components/StreamingText/StreamingMarkdown'
 import ThinkingPanel from '@/components/ThinkingPanel'
 
 interface MessageItemProps {
@@ -16,7 +17,7 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, isStreaming = false 
 
   if (isUser) {
     return (
-      <div className="flex animate-message-in justify-end">
+      <div className="flex justify-end">
         <div className="max-w-[78%] rounded-md rounded-tr-sm border border-border bg-secondary px-4 py-3 text-secondary-foreground shadow-sm">
           <MarkdownContent content={message.content} />
         </div>
@@ -32,24 +33,34 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, isStreaming = false 
   const hasThinking = message.thinking !== undefined && message.thinking.length > 0
 
   return (
-    <div className="flex animate-message-in justify-start">
-      <div className="min-w-0 max-w-[82%] space-y-3">
+    <div className="flex justify-start">
+      <div className="min-w-0 w-full space-y-3">
         {hasThinking && (
           <ThinkingPanel
             thinking={message.thinking || ''}
             complete={message.thinkingComplete || false}
+            streaming={!message.thinkingComplete}
+            messageId={message.id}
           />
         )}
-        {parts.map((part, index) =>
+        {parts.map((part) =>
           part.type === 'text' ? (
-            <div key={`text-${index}`} className="px-1 py-1">
-              <MarkdownContent content={part.content} />
+            <div key={part.id} className="px-1 py-1">
+              <StreamingMarkdown
+                content={part.content}
+                streaming={isStreaming}
+                resetKey={`${message.id}-${part.id}`}
+              />
             </div>
           ) : (
-            <VisualRenderer key={`visual-${index}`} blocks={[part.block]} />
+            <VisualRenderer key={part.id} blocks={[part.block]} />
           )
         )}
-        {isStreaming && pendingVisualType && <VisualSkeleton type={pendingVisualType} />}
+        {isStreaming && pendingVisualType && (
+          <div>
+            <VisualSkeleton type={pendingVisualType} />
+          </div>
+        )}
       </div>
     </div>
   )

@@ -4,8 +4,8 @@ const VISUAL_BLOCK_REGEX = /```visual:(\w+)\n([\s\S]*?)\n```/g
 const VISUAL_FENCE_MARKER = '```visual:'
 
 export type ParsedMessagePart =
-  | { type: 'text'; content: string }
-  | { type: 'visual'; block: VisualBlock }
+  | { type: 'text'; id: string; content: string }
+  | { type: 'visual'; id: string; block: VisualBlock }
 
 interface VisualCandidate {
   start: number
@@ -216,16 +216,28 @@ export function parseMessage(content: string): {
   for (const candidate of candidates) {
     const textPart = cleanupText(content.slice(cursor, candidate.start))
     if (textPart) {
-      parts.push({ type: 'text', content: textPart })
+      parts.push({
+        type: 'text',
+        id: `text-${cursor}`,
+        content: textPart
+      })
     }
-    parts.push({ type: 'visual', block: candidate.block })
+    parts.push({
+      type: 'visual',
+      id: `visual-${candidate.start}`,
+      block: candidate.block
+    })
     cursor = candidate.end
   }
 
   const pendingVisualType = getPendingVisualType(content)
   const trailingText = cleanupText(content.slice(cursor))
   if (trailingText) {
-    parts.push({ type: 'text', content: trailingText })
+    parts.push({
+      type: 'text',
+      id: `text-${cursor}`,
+      content: trailingText
+    })
   }
 
   const text = cleanupText(

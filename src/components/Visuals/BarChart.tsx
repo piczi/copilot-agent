@@ -14,6 +14,9 @@ const BarChart: React.FC<BarChartProps> = ({ title, data, seriesName }) => {
   const theme = getChartTheme()
   const option = {
     backgroundColor: 'transparent',
+    animationDuration: 700,
+    animationEasing: 'cubicOut',
+    animationDelay: (index: number) => index * 24,
     title: {
       text: title,
       left: 'center',

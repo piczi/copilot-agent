@@ -14,6 +14,8 @@ const LineChart: React.FC<LineChartProps> = ({ title, data, seriesName }) => {
   const theme = getChartTheme()
   const option = {
     backgroundColor: 'transparent',
+    animationDuration: 800,
+    animationEasing: 'quadraticOut',
     title: {
       text: title,
       left: 'center',
@@ -56,6 +58,7 @@ const LineChart: React.FC<LineChartProps> = ({ title, data, seriesName }) => {
         smooth: true,
         symbol: 'circle',
         symbolSize: 4,
+        animationDelay: (index: number) => index * 18,
         data: data.map((d) => d.value),
         lineStyle: { width: 2, color: theme.primary },
         itemStyle: { color: theme.primary },

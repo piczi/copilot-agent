@@ -1,6 +1,8 @@
 import React, { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import type { PluggableList } from 'unified'
+import type { Components } from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Copy, Check } from 'lucide-react'
@@ -8,6 +10,8 @@ import { Copy, Check } from 'lucide-react'
 interface MarkdownContentProps {
   content: string
   className?: string
+  remarkPlugins?: PluggableList
+  components?: Components
 }
 
 const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, code }) => {
@@ -64,11 +68,16 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
   )
 }
 
-const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, className = '' }) => {
+const MarkdownContent: React.FC<MarkdownContentProps> = ({
+  content,
+  className = '',
+  remarkPlugins = [],
+  components = {}
+}) => {
   return (
     <div className={className}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, ...remarkPlugins]}
         components={{
           // 段落
           p: ({ children }) => <p className="mb-2 text-sm leading-relaxed text-foreground last:mb-0">{children}</p>,
@@ -170,6 +179,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, className = 
           img: ({ src, alt }) => (
             <img src={src} alt={alt || ''} className="my-2 max-w-full rounded-md border border-border" loading="lazy" />
           ),
+          ...components
         }}
       >
         {content}

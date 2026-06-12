@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, Bot, CheckCircle, Moon, PanelLeftClose, PanelLeftOpen, Settings, SquarePen, Sun } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import ChatContainer from '@/components/Chat/ChatContainer'
 import Sidebar from '@/components/Sidebar/Sidebar'
 import { useChatStore } from '@/store/chatStore'
@@ -29,6 +30,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { pressable, quickFade, softSpring } from '@/lib/motion'
 
 const PROVIDERS = [
   { value: 'openai', label: 'OpenAI', defaultBaseURL: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' },
@@ -216,37 +218,52 @@ function App() {
     <div className="aurora-bg flex h-screen flex-col overflow-hidden text-foreground">
       <div className="window-drag z-20 flex h-8 shrink-0 items-center border-b border-border bg-background/95 px-1.5">
         <div className="window-no-drag flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className={toolbarButtonClass}
-            onClick={() => setSidebarCollapsed((value) => !value)}
-            aria-label={sidebarCollapsed ? '展开聊天历史' : '收起聊天历史'}
-            title={sidebarCollapsed ? '展开聊天历史' : '收起聊天历史'}
-          >
-            {sidebarCollapsed
-              ? <PanelLeftOpen size={14} strokeWidth={1.8} />
-              : <PanelLeftClose size={14} strokeWidth={1.8} />}
-          </Button>
-          <Button
-            onClick={handleNewChat}
-            variant="ghost"
-            size="icon-sm"
-            className={toolbarButtonClass}
-            aria-label="新对话"
-            title="新对话"
-          >
-            <SquarePen size={14} strokeWidth={1.8} />
-          </Button>
+          <motion.div {...pressable}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={toolbarButtonClass}
+              onClick={() => setSidebarCollapsed((value) => !value)}
+              aria-label={sidebarCollapsed ? '展开聊天历史' : '收起聊天历史'}
+              title={sidebarCollapsed ? '展开聊天历史' : '收起聊天历史'}
+            >
+              <AnimatePresence initial={false} mode="wait">
+                <motion.span
+                  key={sidebarCollapsed ? 'open-sidebar' : 'close-sidebar'}
+                  initial={{ opacity: 0, x: sidebarCollapsed ? -4 : 4, scale: 0.9 }}
+                  animate={{ opacity: 1, x: 0, scale: 1 }}
+                  exit={{ opacity: 0, x: sidebarCollapsed ? 4 : -4, scale: 0.9 }}
+                  transition={quickFade}
+                  className="grid place-items-center"
+                >
+                  {sidebarCollapsed
+                    ? <PanelLeftOpen size={14} strokeWidth={1.8} />
+                    : <PanelLeftClose size={14} strokeWidth={1.8} />}
+                </motion.span>
+              </AnimatePresence>
+            </Button>
+          </motion.div>
+          <motion.div {...pressable}>
+            <Button
+              onClick={handleNewChat}
+              variant="ghost"
+              size="icon-sm"
+              className={toolbarButtonClass}
+              aria-label="新对话"
+              title="新对话"
+            >
+              <SquarePen size={14} strokeWidth={1.8} />
+            </Button>
+          </motion.div>
           {settingsControl}
         </div>
       </div>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar collapsed={sidebarCollapsed} />
-        <main className="min-w-0 flex-1 overflow-hidden bg-background">
+        <motion.main layout transition={softSpring} className="min-w-0 flex-1 overflow-hidden bg-background">
           <ChatContainer />
-        </main>
+        </motion.main>
       </div>
 
       <Dialog open={showSettings} onOpenChange={setShowSettings}>

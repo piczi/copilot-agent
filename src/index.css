@@ -174,12 +174,24 @@
     animation: fade-up 180ms cubic-bezier(0.2, 0, 0, 1) both;
   }
 
+  .animate-fade-out {
+    animation: fade-out 140ms cubic-bezier(0.2, 0, 1, 1) both;
+  }
+
   .animate-menu-in {
     animation: menu-in 150ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
+  .animate-menu-out {
+    animation: menu-out 110ms cubic-bezier(0.2, 0, 1, 1) both;
+  }
+
   .animate-dialog-in {
     animation: dialog-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .animate-dialog-out {
+    animation: dialog-out 130ms cubic-bezier(0.2, 0, 1, 1) both;
   }
 
   .animate-message-in {
@@ -209,6 +221,27 @@
   .animate-shimmer {
     background-size: 220% 100%;
     animation: shimmer 1.4s ease-in-out infinite;
+  }
+
+  .stream-chunk {
+    display: inline;
+    word-break: break-word;
+    will-change: opacity;
+  }
+
+  .stream-chunk-fade {
+    animation: stream-chunk-fade 500ms ease-out both;
+  }
+
+  .streaming-plain-text {
+    font-family: inherit;
+  }
+
+  .streaming-plain-text p,
+  .streaming-plain-text li,
+  .streaming-plain-text code {
+    font-size: 11px;
+    line-height: 1.25rem;
   }
 
   .stagger-1 {
@@ -272,6 +305,15 @@
   }
 }
 
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 @keyframes menu-in {
   from {
     opacity: 0;
@@ -280,6 +322,17 @@
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes menu-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.98);
   }
 }
 
@@ -294,6 +347,17 @@
   }
 }
 
+@keyframes dialog-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.98);
+  }
+}
+
 @keyframes message-in {
   from {
     opacity: 0;
@@ -302,6 +366,15 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes stream-chunk-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 
