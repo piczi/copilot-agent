@@ -40,8 +40,25 @@ const PROVIDERS = [
   { value: 'custom', label: '自定义', defaultBaseURL: '', defaultModel: '' }
 ]
 
+const SIDEBAR_WIDTH_STORAGE_KEY = 'sidebar-width'
+const DEFAULT_SIDEBAR_WIDTH = 240
+const MIN_SIDEBAR_WIDTH = 200
+const MAX_SIDEBAR_WIDTH = 420
+
+function getInitialSidebarWidth() {
+  if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH
+
+  const storedValue = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)
+  if (storedValue === null) return DEFAULT_SIDEBAR_WIDTH
+
+  const stored = Number(storedValue)
+  if (!Number.isFinite(stored)) return DEFAULT_SIDEBAR_WIDTH
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, stored))
+}
+
 function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth)
   const [showSettings, setShowSettings] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'light'
@@ -67,6 +84,10 @@ function App() {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     window.localStorage.setItem('theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth))
+  }, [sidebarWidth])
 
   useEffect(() => {
     loadConversations()
@@ -260,7 +281,7 @@ function App() {
       </div>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <Sidebar collapsed={sidebarCollapsed} />
+        <Sidebar collapsed={sidebarCollapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} />
         <motion.main layout transition={softSpring} className="min-w-0 flex-1 overflow-hidden bg-background">
           <ChatContainer />
         </motion.main>

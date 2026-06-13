@@ -66,4 +66,4 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, isStreaming = false 
   )
 }
 
-export default MessageItem
+export default React.memo(MessageItem)

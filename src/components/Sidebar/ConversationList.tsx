@@ -19,7 +19,7 @@ const ConversationList: React.FC = () => {
   )
 
   return (
-    <motion.div layout className="h-full space-y-0.5 overflow-y-auto px-2 py-2">
+    <motion.div layout className="scrollbar-auto-hide h-full space-y-0.5 overflow-y-auto px-2 py-2">
       <AnimatePresence initial={false}>
         {sorted.length === 0 && (
         <motion.div
