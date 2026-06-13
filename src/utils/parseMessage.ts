@@ -2,6 +2,13 @@ import { VisualBlock } from '@/types'
 
 const VISUAL_BLOCK_REGEX = /```visual:(\w+)\n([\s\S]*?)\n```/g
 const VISUAL_FENCE_MARKER = '```visual:'
+const INTERNAL_VISUAL_LABELS: Record<string, string> = {
+  line_chart: '折线图',
+  bar_chart: '柱状图',
+  pie_chart: '饼图',
+  weather_card: '天气卡片',
+  terminal: '终端输出'
+}
 
 export type ParsedMessagePart =
   | { type: 'text'; id: string; content: string }
@@ -116,8 +123,29 @@ function hideIncompleteVisualContent(text: string): string {
   return hideIncompleteDirectVisual(hideIncompleteVisualFence(hidePendingVisualFencePrefix(text)))
 }
 
+function hideInternalVisualLabels(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => {
+      const match = /^(\s*(?:[-*]\s*)?)(?:visual:)?(line_chart|bar_chart|pie_chart|weather_card|terminal)\s*(?:[—-]\s*)?(.*)$/i.exec(line)
+      if (!match) return line
+
+      const [, prefix, rawType, rest] = match
+      const label = INTERNAL_VISUAL_LABELS[rawType.toLowerCase()]
+      const trimmedRest = rest.trimStart()
+      return trimmedRest.startsWith(label) ? `${prefix}${trimmedRest}` : `${prefix}${label}${trimmedRest ? ` - ${trimmedRest}` : ''}`
+    })
+    .join('\n')
+}
+
+function hideUnsupportedVisualTags(text: string): string {
+  return text
+    .replace(/<\s*(?:line_chart|bar_chart|pie_chart|weather_card|terminal)\b[^>]*\/\s*>/gi, '')
+    .replace(/<\s*(?:line_chart|bar_chart|pie_chart|weather_card|terminal)\b[\s\S]*?<\s*\/\s*(?:line_chart|bar_chart|pie_chart|weather_card|terminal)\s*>/gi, '')
+}
+
 function cleanupText(text: string): string {
-  return hideIncompleteVisualContent(text).replace(/\n{3,}/g, '\n\n').trim()
+  return hideInternalVisualLabels(hideUnsupportedVisualTags(hideIncompleteVisualContent(text))).replace(/\n{3,}/g, '\n\n').trim()
 }
 
 function overlaps(candidate: VisualCandidate, accepted: VisualCandidate[]): boolean {

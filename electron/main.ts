@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import StoreModule from 'electron-store'
 import { SYSTEM_PROMPT } from '@/agent/prompts/system'
 import { fetchCrypto, resolveCoinId } from '@/services/crypto'
+import { fetchExchangeRate } from '@/services/exchange-rate'
 import { fetchWeather } from '@/services/weather'
 const Store = (StoreModule as any).default || StoreModule
 
@@ -495,12 +496,16 @@ function createTerminalBlock(command: string, platform: string, output: string, 
   }, null, 2)}\n\`\`\``
 }
 
+function createVisualBlock(type: string, data: Record<string, unknown>): string {
+  return `\`\`\`visual:${type}\n${JSON.stringify(data, null, 2)}\n\`\`\``
+}
+
 const CHAT_TOOLS = [
   {
     type: 'function',
     function: {
       name: 'fetch_weather',
-      description: '获取指定城市的当前天气和未来3天天气预报。参数 city 为中文或英文城市名，如"北京"、"Shanghai"',
+      description: '获取指定城市的真实当前天气和未来3天天气预报。用户询问天气、气温、降雨或预报时必须使用，不要凭记忆编造天气数据。',
       parameters: {
         type: 'object',
         properties: {
@@ -517,7 +522,7 @@ const CHAT_TOOLS = [
     type: 'function',
     function: {
       name: 'fetch_crypto',
-      description: '获取加密货币行情数据。支持 bitcoin, ethereum, solana, cardano 等，也支持中文名称如"比特币"。',
+      description: '获取真实加密货币行情数据，包含当前价格、24小时涨跌幅、市值和近30天历史价格。用户询问加密货币价格、行情、走势、趋势或图表时必须使用，不要凭记忆编造价格序列。获取数据后如需展示图表，继续调用 render_visual。',
       parameters: {
         type: 'object',
         properties: {
@@ -527,6 +532,53 @@ const CHAT_TOOLS = [
           }
         },
         required: ['coinId']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fetch_exchange_rate',
+      description: '获取两种货币之间的真实历史汇率数据。base 和 target 均为 3 字母货币代码，如 CNY, USD, EUR, JPY, GBP。用户询问汇率、走势、趋势或图表时必须使用，不要凭记忆编造汇率数据。获取数据后如需展示图表，继续调用 render_visual。',
+      parameters: {
+        type: 'object',
+        properties: {
+          base: {
+            type: 'string',
+            description: '基础货币代码，如 "USD"、"CNY"'
+          },
+          target: {
+            type: 'string',
+            description: '目标货币代码，如 "CNY"、"EUR"'
+          },
+          days: {
+            type: 'number',
+            description: '历史天数，默认 30 天'
+          }
+        },
+        required: ['base', 'target']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'render_visual',
+      description: '把已获取的真实数据渲染成前端可展示的可视化组件。只能基于工具返回或用户明确提供的数据调用；不要直接在回复正文中手写 XML、HTML、JSX 或组件标签。',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            enum: ['weather_card', 'line_chart', 'bar_chart', 'pie_chart', 'terminal'],
+            description: '可视化类型：weather_card 天气卡片；line_chart 折线图；bar_chart 柱状图；pie_chart 饼图；terminal 终端输出。'
+          },
+          data: {
+            type: 'object',
+            description: '组件数据。line_chart/bar_chart 使用 { title, xAxis, yAxis, data: [{ name, value }], seriesName }；pie_chart 使用 { title, data: [{ name, value }] }；weather_card 使用 { city, temperature, feelsLike, condition, humidity, windSpeed, forecast }；terminal 使用 { command, platform, output, exitCode }。'
+          }
+        },
+        required: ['type', 'data']
       }
     }
   },
@@ -579,6 +631,39 @@ async function executeFetchCryptoTool(coinId: string): Promise<string> {
   }
 }
 
+async function executeFetchExchangeRateTool(base: string, target: string, days?: number): Promise<string> {
+  const trimmedBase = base.trim().toUpperCase()
+  const trimmedTarget = target.trim().toUpperCase()
+  const safeDays = Number.isFinite(days) && days && days > 0 ? Math.min(Math.floor(days), 365) : 30
+
+  if (!trimmedBase || !trimmedTarget) {
+    return JSON.stringify({ error: '货币代码不能为空' })
+  }
+
+  try {
+    return JSON.stringify(await fetchExchangeRate(trimmedBase, trimmedTarget, safeDays), null, 2)
+  } catch (err) {
+    return JSON.stringify({
+      error: `获取汇率失败: ${err instanceof Error ? err.message : String(err)}`
+    })
+  }
+}
+
+function executeRenderVisualTool(type: string, data: unknown): { ok: boolean; block?: string; error?: string } {
+  const allowedTypes = new Set(['weather_card', 'line_chart', 'bar_chart', 'pie_chart', 'terminal'])
+  if (!allowedTypes.has(type)) {
+    return { ok: false, error: `不支持的可视化类型：${type}` }
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { ok: false, error: '可视化数据必须是对象' }
+  }
+
+  return {
+    ok: true,
+    block: createVisualBlock(type, data as Record<string, unknown>)
+  }
+}
+
 async function createWeatherToolMessages(message: string): Promise<ChatMessage[] | undefined> {
   if (!isWeatherQuery(message)) return undefined
 
@@ -601,7 +686,7 @@ async function createWeatherToolMessages(message: string): Promise<ChatMessage[]
           }
         }
       ],
-      reasoning_content: `需要调用 fetch_weather 获取 "${city}" 的真实天气数据。`
+      reasoning_content: `需要获取 "${city}" 的真实天气数据。`
     },
     {
       role: 'tool',
@@ -898,6 +983,56 @@ async function streamNativeChat(
         continue
       }
 
+      if (toolCall.function.name === 'fetch_exchange_rate') {
+        let base = ''
+        let target = ''
+        let days: number | undefined
+        try {
+          const args = JSON.parse(toolCall.function.arguments || '{}')
+          base = args.base || ''
+          target = args.target || ''
+          days = Number(args.days)
+        } catch {
+          base = ''
+          target = ''
+        }
+
+        const result = await executeFetchExchangeRateTool(base, target, days)
+        if (signal.aborted) return
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: result
+        })
+        continue
+      }
+
+      if (toolCall.function.name === 'render_visual') {
+        let type = ''
+        let data: unknown
+        try {
+          const args = JSON.parse(toolCall.function.arguments || '{}')
+          type = args.type || ''
+          data = args.data
+        } catch {
+          type = ''
+        }
+
+        const result = executeRenderVisualTool(type, data)
+        if (signal.aborted) return
+        if (result.ok && result.block) {
+          const baseText = visibleText.replace(/\s+$/, '')
+          const separator = baseText ? '\n\n' : ''
+          routedEmit({ type: 'replace_text', chunk: `${baseText}${separator}${result.block}` })
+        }
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(result.ok ? { rendered: true } : { error: result.error })
+        })
+        continue
+      }
+
       if (toolCall.function.name !== 'exec_bash') {
         messages.push({
           role: 'tool',
@@ -1033,6 +1168,48 @@ async function nativeChat(config: LLMConfig, message: string, history: ChatHisto
           role: 'tool',
           tool_call_id: toolCall.id,
           content: await executeFetchCryptoTool(coinId)
+        })
+        continue
+      }
+
+      if (toolCall.function.name === 'fetch_exchange_rate') {
+        let base = ''
+        let target = ''
+        let days: number | undefined
+        try {
+          const args = JSON.parse(toolCall.function.arguments || '{}')
+          base = args.base || ''
+          target = args.target || ''
+          days = Number(args.days)
+        } catch {
+          base = ''
+          target = ''
+        }
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: await executeFetchExchangeRateTool(base, target, days)
+        })
+        continue
+      }
+
+      if (toolCall.function.name === 'render_visual') {
+        let type = ''
+        let data: unknown
+        try {
+          const args = JSON.parse(toolCall.function.arguments || '{}')
+          type = args.type || ''
+          data = args.data
+        } catch {
+          type = ''
+        }
+
+        const result = executeRenderVisualTool(type, data)
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: result.ok && result.block ? result.block : JSON.stringify({ error: result.error })
         })
         continue
       }
