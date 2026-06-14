@@ -15,7 +15,7 @@ export const goldTool = tool(
   },
   {
     name: 'fetch_gold',
-    description: '获取真实黄金价格数据（美元/盎司），包含当前价格、24小时涨跌幅和历史日线。用户询问黄金、金价、贵金属价格、走势、趋势或图表时必须使用，不要用 curl 或 exec_bash 自行抓取。获取数据后如需展示图表，必须继续调用 render_visual。',
+    description: '获取真实黄金价格数据（美元/盎司），包含当前价格、24小时涨跌幅和历史日线。用户询问黄金、金价、贵金属价格、走势、趋势或图表时必须使用本工具；不要用命令行重复抓取同类黄金数据。获取数据后如需展示图表，必须继续调用 render_visual。',
     schema: z.object({
       days: z.number().optional().describe('历史天数，默认 7 天，最多 365 天')
     })

@@ -36,6 +36,25 @@ const AgentState = Annotation.Root({
 
 let compiledGraph: CompiledStateGraph<typeof AgentState.State, typeof AgentState.Update> | null = null
 
+const VISUAL_FENCE_PATTERN = /```visual:[\w]+\n[\s\S]*?\n```/
+
+function resolveAssistantContent(
+  visibleContent: string,
+  gathered: AIMessageChunk | undefined
+): string | unknown {
+  if (VISUAL_FENCE_PATTERN.test(visibleContent)) {
+    return visibleContent
+  }
+
+  const gatheredContent = gathered && typeof gathered.content === 'string'
+    ? gathered.content
+    : ''
+
+  return visibleContent.length > gatheredContent.length
+    ? visibleContent
+    : (gathered?.content ?? visibleContent)
+}
+
 async function prefetchNode(state: typeof AgentState.State): Promise<{ messages: BaseMessage[] }> {
   const lastMessage = state.messages[state.messages.length - 1]
   if (!lastMessage || !HumanMessage.isInstance(lastMessage)) {
@@ -99,13 +118,8 @@ function createAgentNode(llmConfig: LLMConfig) {
       emit?.({ type: 'thinking_done' })
     }
 
-    const gatheredContent = gathered && typeof gathered.content === 'string'
-      ? gathered.content
-      : ''
     const visibleContent = runtime?.visibleTextRef.current ?? ''
-    const finalContent = visibleContent.length > gatheredContent.length
-      ? visibleContent
-      : (gathered?.content ?? visibleContent)
+    const finalContent = resolveAssistantContent(visibleContent, gathered)
 
     const response = gathered
       ? new AIMessage({

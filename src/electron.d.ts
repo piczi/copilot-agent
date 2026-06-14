@@ -17,6 +17,7 @@ declare global {
         options: { conversationId: string; mode?: CommandMode },
         onEvent: (event: ChatCompletionStreamEvent) => void
       ) => (cancel?: boolean) => void
+      respondCommandApproval: (requestId: string, approvalId: string, approved: boolean) => void
       listConversations: () => Promise<ConversationIndexEntry[]>
       getConversationMessages: (conversationId: string) => Promise<Message[]>
       createConversation: () => Promise<{ id: string; title: string; messages: Message[]; createdAt: number; updatedAt: number }>

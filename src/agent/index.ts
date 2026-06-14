@@ -1,5 +1,6 @@
 import { CommandMode } from '@/types'
 import type { ChatCompletionStreamEvent } from '@/electron.d.ts'
+import { useApprovalStore } from '@/store/approvalStore'
 
 function waitForChatStream(
   conversationId: string,
@@ -61,6 +62,18 @@ function waitForChatStream(
         if (event.type === 'replace_text') {
           text = event.chunk || ''
           onReplace?.(text)
+          return
+        }
+
+        if (event.type === 'approval_required') {
+          if (!event.requestId || !event.approvalId) return
+          useApprovalStore.getState().showApproval({
+            requestId: event.requestId,
+            approvalId: event.approvalId,
+            command: event.command || '',
+            reason: event.reason || '该操作需要用户审批',
+            kind: event.approvalKind || 'command'
+          })
           return
         }
 

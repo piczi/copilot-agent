@@ -40,10 +40,6 @@ function sortConversationsByActivity(a: Conversation, b: Conversation): number {
   return b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || b.id.localeCompare(a.id)
 }
 
-function isEmptyConversation(conversation: Conversation): boolean {
-  return conversation.messages.length === 0
-}
-
 function indexToConversation(entry: ConversationIndexEntry, messages: Message[] = []): Conversation {
   return {
     id: entry.id,
@@ -67,6 +63,41 @@ async function fetchMessages(conversationId: string): Promise<Message[]> {
     return []
   }
   return window.electronAPI.getConversationMessages(conversationId)
+}
+
+async function findOrCreateEmptyConversation(
+  conversations: Conversation[]
+): Promise<{ conversations: Conversation[]; activeId: string; messages: Message[] }> {
+  if (typeof window === 'undefined' || !window.electronAPI?.createConversation) {
+    const fallback: Conversation = {
+      id: crypto.randomUUID(),
+      title: DEFAULT_TITLE,
+      messages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    }
+    return {
+      conversations: [fallback, ...conversations],
+      activeId: fallback.id,
+      messages: []
+    }
+  }
+
+  for (const conversation of conversations) {
+    if (conversation.title !== DEFAULT_TITLE) continue
+    const messages = await fetchMessages(conversation.id)
+    if (messages.length === 0) {
+      return { conversations, activeId: conversation.id, messages: [] }
+    }
+  }
+
+  const created = await window.electronAPI.createConversation()
+  const entry = indexToConversation(created)
+  return {
+    conversations: [entry, ...conversations.filter((item) => item.id !== entry.id)],
+    activeId: entry.id,
+    messages: []
+  }
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -183,18 +214,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   createConversation: async () => {
     if (typeof window !== 'undefined' && window.electronAPI?.createConversation) {
-      const emptyIds = get().conversations
-        .filter(isEmptyConversation)
-        .map((conversation) => conversation.id)
-      await Promise.all(
-        emptyIds.map((emptyId) => window.electronAPI!.deleteConversation(emptyId))
-      )
+      const { activeConversationId, conversations } = get()
+      const activeConv = conversations.find((conversation) => conversation.id === activeConversationId)
+      const shouldRemoveActive = Boolean(activeConv && activeConv.messages.length === 0)
+
+      if (shouldRemoveActive) {
+        await window.electronAPI.deleteConversation(activeConversationId)
+      }
 
       const created = await window.electronAPI.createConversation()
       set((state) => ({
         conversations: [
           created,
-          ...state.conversations.filter((item) => !emptyIds.includes(item.id))
+          ...state.conversations.filter((item) => !shouldRemoveActive || item.id !== activeConversationId)
         ],
         activeConversationId: created.id,
         inputText: '',
@@ -283,23 +315,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     const index = await window.electronAPI.listConversations()
-    let conversations = index.map((entry) => indexToConversation(entry))
-
-    if (conversations.length === 0) {
-      const created = await window.electronAPI.createConversation()
-      conversations = [created]
-    }
-
-    const activeConversationId = conversations[0]?.id || ''
-    const messages = activeConversationId
-      ? await fetchMessages(activeConversationId)
-      : []
+    const conversations = index.map((entry) => indexToConversation(entry))
+    const { conversations: nextConversations, activeId, messages } =
+      await findOrCreateEmptyConversation(conversations)
 
     set({
-      conversations: conversations.map((conversation, idx) => (
-        idx === 0 ? { ...conversation, messages } : conversation
+      conversations: nextConversations.map((conversation) => (
+        conversation.id === activeId ? { ...conversation, messages } : conversation
       )),
-      activeConversationId
+      activeConversationId: activeId
     })
   },
 
@@ -307,13 +331,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (typeof window !== 'undefined' && window.electronAPI?.touchConversation) {
       const entry = await window.electronAPI.touchConversation(conversationId, message)
       if (!entry) return
-      set((state) => ({
-        conversations: state.conversations.map((conversation) => (
-          conversation.id === conversationId
-            ? { ...conversation, title: entry.title, updatedAt: entry.updatedAt }
-            : conversation
-        ))
-      }))
+      set((state) => {
+        const exists = state.conversations.some((conversation) => conversation.id === conversationId)
+        const nextConversations = exists
+          ? state.conversations.map((conversation) => (
+            conversation.id === conversationId
+              ? { ...conversation, title: entry.title, updatedAt: entry.updatedAt }
+              : conversation
+          ))
+          : [
+            {
+              id: entry.id,
+              title: entry.title,
+              messages: [],
+              createdAt: entry.createdAt,
+              updatedAt: entry.updatedAt
+            },
+            ...state.conversations
+          ]
+        return { conversations: nextConversations.sort(sortConversationsByActivity) }
+      })
     }
   }
 }))

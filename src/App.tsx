@@ -30,7 +30,8 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { pressable, quickFade, softSpring } from '@/lib/motion'
+import { quickFade, softSpring } from '@/lib/motion'
+import CommandApprovalDialog from '@/components/CommandApprovalDialog'
 
 const PROVIDERS = [
   { value: 'openai', label: 'OpenAI', defaultBaseURL: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' },
@@ -228,43 +229,39 @@ function App() {
     <div className="aurora-bg flex h-screen flex-col overflow-hidden text-foreground">
       <div className="window-toolbar window-drag z-20 flex shrink-0 border-b border-border bg-background/95 px-1.5">
         <div className="window-no-drag flex items-center gap-1">
-          <motion.div {...pressable}>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className={toolbarButtonClass}
-              onClick={() => setSidebarCollapsed((value) => !value)}
-              aria-label={sidebarCollapsed ? '展开聊天历史' : '收起聊天历史'}
-              title={sidebarCollapsed ? '展开聊天历史' : '收起聊天历史'}
-            >
-              <AnimatePresence initial={false} mode="wait">
-                <motion.span
-                  key={sidebarCollapsed ? 'open-sidebar' : 'close-sidebar'}
-                  initial={{ opacity: 0, x: sidebarCollapsed ? -4 : 4, scale: 0.9 }}
-                  animate={{ opacity: 1, x: 0, scale: 1 }}
-                  exit={{ opacity: 0, x: sidebarCollapsed ? 4 : -4, scale: 0.9 }}
-                  transition={quickFade}
-                  className="grid place-items-center"
-                >
-                  {sidebarCollapsed
-                    ? <PanelLeftOpen size={14} strokeWidth={1.8} />
-                    : <PanelLeftClose size={14} strokeWidth={1.8} />}
-                </motion.span>
-              </AnimatePresence>
-            </Button>
-          </motion.div>
-          <motion.div {...pressable}>
-            <Button
-              onClick={handleNewChat}
-              variant="ghost"
-              size="icon-sm"
-              className={toolbarButtonClass}
-              aria-label="新对话"
-              title="新对话"
-            >
-              <SquarePen size={14} strokeWidth={1.8} />
-            </Button>
-          </motion.div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={toolbarButtonClass}
+            onClick={() => setSidebarCollapsed((value) => !value)}
+            aria-label={sidebarCollapsed ? '展开聊天历史' : '收起聊天历史'}
+            title={sidebarCollapsed ? '展开聊天历史' : '收起聊天历史'}
+          >
+            <AnimatePresence initial={false} mode="wait">
+              <motion.span
+                key={sidebarCollapsed ? 'open-sidebar' : 'close-sidebar'}
+                initial={{ opacity: 0, x: sidebarCollapsed ? -4 : 4, scale: 0.9 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: sidebarCollapsed ? 4 : -4, scale: 0.9 }}
+                transition={quickFade}
+                className="grid place-items-center"
+              >
+                {sidebarCollapsed
+                  ? <PanelLeftOpen size={14} strokeWidth={1.8} />
+                  : <PanelLeftClose size={14} strokeWidth={1.8} />}
+              </motion.span>
+            </AnimatePresence>
+          </Button>
+          <Button
+            onClick={handleNewChat}
+            variant="ghost"
+            size="icon-sm"
+            className={toolbarButtonClass}
+            aria-label="新对话"
+            title="新对话"
+          >
+            <SquarePen size={14} strokeWidth={1.8} />
+          </Button>
           {settingsControl}
         </div>
       </div>
@@ -357,6 +354,8 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CommandApprovalDialog />
     </div>
   )
 }

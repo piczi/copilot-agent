@@ -4,10 +4,13 @@ export { initCheckpointer } from './checkpointer'
 export { buildAgentGraph } from './graph'
 export { messagesToUiMessages, seedThreadMessages } from './messages'
 export {
+  getConversationMessageSnapshot,
   getConversationIndex,
-  upsertConversationIndex,
-  removeConversationIndex,
   deriveTitleFromMessage,
   migrateLegacyConversations,
-  toConversation
+  removeConversationIndex,
+  removeConversationMessageSnapshot,
+  toConversation,
+  upsertConversationIndex,
+  upsertConversationMessageSnapshot
 } from './conversation-index'

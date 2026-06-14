@@ -47,7 +47,7 @@ electron/
     checkpointer.ts       # SqliteSaver（失败回退 MemorySaver）
     prefetch.ts           # 天气/黄金/加密货币/汇率意图预取
     context.ts            # AgentRuntimeContext（emit、审批、visibleText）
-    tools/                # 9 个 LangChain tools（Zod schema）
+    tools/                # 10 个 LangChain tools（Zod schema）
     security/             # 命令白名单、路径限制
     conversation-index.ts # 会话标题索引
     messages.ts           # LangChain Message ↔ UI Message 转换
@@ -101,10 +101,30 @@ src/
 | `fetch_crypto` | `crypto.ts` | CoinGecko / Binance |
 | `fetch_gold` | `gold.ts` | Binance PAXG |
 | `fetch_exchange_rate` | `exchange-rate.ts` | Frankfurter |
+| `fetch_url` | `fetch-url.ts` | 受控 HTTP GET（SSRF 防护，restricted 需审批） |
 | `render_visual` | `render-visual.ts` | 输出 visual 围栏，触发 `replace_text` |
 | `read_file` | `read-file.ts` | 工作区内只读文件 |
 | `list_directory` | `list-directory.ts` | 工作区内列目录 |
-| `exec_bash` | `exec-bash.ts` | 本机命令，受限模式需 IPC 审批 |
+| `exec_bash` | `exec-bash.ts` | 本机命令兜底 escalator，受限模式需 IPC 审批 |
+
+**能力升级（Capability Escalation）**
+
+当用户需求超出专用工具覆盖范围时，Agent 应遵循以下顺序，而非直接拒绝：
+
+1. 专用数据工具（天气/汇率/加密货币/黄金）
+2. `read_file` / `list_directory`（工作区只读）
+3. `exec_bash`（本机只读命令兜底）
+4. `fetch_url`（受控公开 HTTP GET）
+
+跨工具行为写在 `SYSTEM_PROMPT`（拒绝前必试、审批不等于拒绝）；各工具 `description` 写清「覆盖 X / 不覆盖 Y / 失败后降级到 Z」。`stream-adapter.ts` 含拒绝重试护栏（`refusal-guard.ts`）。
+
+**新增工具 Checklist：**
+
+1. 在 `description` 中说明覆盖范围与不覆盖范围的降级路径
+2. 专用领域工具禁止模型用 `fetch_url`/`exec_bash` 重复抓取**同类**数据
+3. factual 工具失败时返回 JSON `{ error }`，便于链式降级
+4. `prefetch.ts` 仅用于高频确定性意图；长尾 factual 依赖 `fetch_url` + escalation 规则
+5. 补充 `tests/` 单测（含安全策略）
 
 **新增工具步骤：**
 
@@ -148,7 +168,7 @@ src/
 
 ## 8. 提示词策略
 
-- **`SYSTEM_PROMPT`**（`src/agent/prompts/system.ts`）：行为边界、数据真实性、不披露内部细节、回复风格
+- **`SYSTEM_PROMPT`**（`src/agent/prompts/system.ts`）：行为边界、数据真实性、问题求解升级规则、不披露内部细节、回复风格
 - **平台指令**（`electron/agent/platform.ts`）：按 win32/darwin/linux 动态注入第二条 system 消息
 - **工具 schema**：只在各 tool 的 `description` + Zod `.describe()` 中维护
 
@@ -156,6 +176,7 @@ src/
 
 - API Key 仅存主进程 electron-store
 - `read_file` / `list_directory`：路径限制在 `cwd` + `APP_ROOT`
+- `fetch_url`：仅 GET；`security/urlPolicy.ts` 拦截内网/私有 IP（SSRF）；restricted 模式需 IPC 审批
 - `exec_bash`：白名单 + 风险评估，受限模式经 preload `window.confirm` 审批
 - 渲染进程 `contextIsolation: true`，`nodeIntegration: false`
 

@@ -1,5 +1,9 @@
 import type { CommandMode } from './types'
 
+export const APPROVAL_TTL_MS = 60_000
+
+export type ApprovalKind = 'command' | 'url'
+
 export type ChatStreamPayloadType =
   | 'thinking'
   | 'thinking_done'
@@ -13,9 +17,11 @@ export interface ChatStreamPayload {
   type: ChatStreamPayloadType
   chunk?: string
   error?: string
+  requestId?: string
   approvalId?: string
   command?: string
   reason?: string
+  approvalKind?: ApprovalKind
 }
 
 export type ChatCompletionStreamEvent = ChatStreamPayload

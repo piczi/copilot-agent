@@ -18,7 +18,7 @@ export const weatherTool = tool(
   },
   {
     name: 'fetch_weather',
-    description: '获取指定城市的真实当前天气和未来3天天气预报。用户询问天气、气温、降雨或预报时必须使用，不要凭记忆编造天气数据。',
+    description: '获取指定城市的真实当前天气和未来3天天气预报。用户询问天气、气温、降雨或预报时必须使用本工具；不要用命令行或 fetch_url 重复抓取同类天气数据。',
     schema: z.object({
       city: z.string().describe('城市名称，如"北京"、"Shanghai"')
     })

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import type { CommandMode } from '@/shared/types'
 import { runAgentStream } from '../agent/stream-adapter'
+import { upsertConversationMessageSnapshot } from '../agent/conversation-index'
 import { getStoredLLMConfig, parseCommandMode } from '../agent/llm-config'
 import {
   getCommandApprovalReason,
@@ -51,7 +52,10 @@ export function registerChatIpc(ipcMain: IpcMain, store: Store): void {
         mode,
         sender: event.sender,
         requestId,
-        signal: controller.signal
+        signal: controller.signal,
+        onMessagesUpdated: (messages) => {
+          upsertConversationMessageSnapshot(store, conversationId, messages)
+        }
       })
     } catch (e) {
       if (!controller.signal.aborted) {

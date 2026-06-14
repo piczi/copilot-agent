@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { AIMessage, HumanMessage, type BaseMessage } from '@langchain/core/messages'
 import type { Message } from '@/shared/types'
 import type { buildAgentGraph } from './graph'
+import { isInternalMessage } from './internal-messages'
 
 export function uiMessagesToBaseMessages(messages: Message[]): BaseMessage[] {
   const result: BaseMessage[] = []
@@ -81,6 +82,10 @@ export function messagesToUiMessages(messages: BaseMessage[]): Message[] {
   const result: Message[] = []
 
   for (const message of messages) {
+    if (isInternalMessage(message)) {
+      continue
+    }
+
     if (HumanMessage.isInstance(message)) {
       const content = typeof message.content === 'string' ? message.content : ''
       if (!content.trim()) continue

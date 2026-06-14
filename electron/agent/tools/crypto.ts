@@ -18,7 +18,7 @@ export const cryptoTool = tool(
   },
   {
     name: 'fetch_crypto',
-    description: '获取真实加密货币行情数据，包含当前价格、24小时涨跌幅、市值和近30天历史价格。用户询问加密货币价格、行情、走势、趋势或图表时必须使用，不要凭记忆编造价格序列。获取数据后如需展示图表，继续调用 render_visual。',
+    description: '获取真实加密货币行情数据，包含当前价格、24小时涨跌幅、市值和近30天历史价格。用户询问加密货币价格、行情、走势、趋势或图表时必须使用本工具；不要用命令行重复抓取同类加密货币数据。获取数据后如需展示图表，继续调用 render_visual。',
     schema: z.object({
       coinId: z.string().describe('加密货币 ID 或名称，如"bitcoin"、"ethereum"、"比特币"')
     })

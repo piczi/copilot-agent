@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { executeAgentStream } from '@/agent'
 import { useChatStore } from '@/store/chatStore'
+import { useApprovalStore } from '@/store/approvalStore'
 import { Message } from '@/types'
 
 const STREAM_FLUSH_INTERVAL_MS = 48
@@ -97,6 +98,7 @@ export function useSendMessage() {
 
       const controller = new AbortController()
       setAbortController(controller)
+      const streamedContentRef = { current: '' }
       const contentBuffer = createStreamBuffer((chunk) => {
         appendToMessage(assistantMsgId, chunk, conversationId)
       })
@@ -118,11 +120,17 @@ export function useSendMessage() {
             }
           },
           (chunk) => {
+            if (streamedContentRef.current.includes('```visual:')) {
+              streamedContentRef.current += chunk
+              updateMessage(assistantMsgId, { content: streamedContentRef.current }, conversationId)
+              return
+            }
             contentBuffer.append(chunk)
           },
           (content) => {
             contentBuffer.flushNow()
             thinkingBuffer.flushNow()
+            streamedContentRef.current = content
             updateMessage(assistantMsgId, { content }, conversationId)
           },
           controller.signal
@@ -135,6 +143,7 @@ export function useSendMessage() {
       } catch (err) {
         contentBuffer.flushNow()
         thinkingBuffer.flushNow()
+        useApprovalStore.getState().clearPending()
         if (err instanceof Error && err.message === '已取消') {
           appendToMessage(assistantMsgId, '\n\n[已停止]', conversationId)
         } else {

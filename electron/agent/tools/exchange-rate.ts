@@ -22,7 +22,7 @@ export const exchangeRateTool = tool(
   },
   {
     name: 'fetch_exchange_rate',
-    description: '获取两种货币之间的真实历史汇率数据。base 和 target 均为 3 字母货币代码，如 CNY, USD, EUR, JPY, GBP。用户询问汇率、走势、趋势或图表时必须使用，不要凭记忆编造汇率数据。获取数据后如需展示图表，继续调用 render_visual。',
+    description: '获取两种货币之间的真实历史汇率数据。base 和 target 均为 3 字母货币代码，如 CNY, USD, EUR, JPY, GBP。用户询问汇率、走势、趋势或图表时必须使用本工具；不要用命令行重复抓取同类汇率数据。获取数据后如需展示图表，继续调用 render_visual。',
     schema: z.object({
       base: z.string().describe('基础货币代码，如 "USD"、"CNY"'),
       target: z.string().describe('目标货币代码，如 "CNY"、"EUR"'),

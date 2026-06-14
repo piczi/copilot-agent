@@ -29,18 +29,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ) => {
     const channel = `chat-completion-stream:${requestId}`
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
-      if (
-        payload &&
-        typeof payload === 'object' &&
-        (payload as { type?: string }).type === 'approval_required'
-      ) {
-        const approval = payload as { approvalId?: string; command?: string; reason?: string }
-        const approved = window.confirm(`受限模式下该命令需要审批：\n\n${approval.command || ''}\n\n原因：${approval.reason || '命令存在风险'}\n\n是否继续执行？`)
-        if (approval.approvalId) {
-          ipcRenderer.send(`chat-command-approval-response:${requestId}:${approval.approvalId}`, approved)
-        }
-        return
-      }
       onEvent(payload)
     }
     ipcRenderer.on(channel, listener)
@@ -52,6 +40,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.send('chat-completion-stream-cancel', requestId)
       }
     }
+  },
+  respondCommandApproval: (requestId: string, approvalId: string, approved: boolean) => {
+    ipcRenderer.send(`chat-command-approval-response:${requestId}:${approvalId}`, approved)
   },
   execCommand: (command: string, options?: unknown) => ipcRenderer.invoke('exec-command', command, options),
 })

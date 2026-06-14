@@ -1,3 +1,4 @@
+import { fetchUrlTool } from './fetch-url'
 import { weatherTool } from './weather'
 import { cryptoTool } from './crypto'
 import { goldTool } from './gold'
@@ -12,6 +13,7 @@ export const ALL_TOOLS = [
   cryptoTool,
   goldTool,
   exchangeRateTool,
+  fetchUrlTool,
   renderVisualTool,
   readFileTool,
   listDirectoryTool,

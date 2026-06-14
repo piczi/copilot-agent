@@ -5,10 +5,12 @@ import {
   buildAgentGraph,
   deriveTitleFromMessage,
   getConversationIndex,
+  getConversationMessageSnapshot,
   messagesToUiMessages,
   migrateLegacyConversations,
   seedThreadMessages,
   removeConversationIndex,
+  removeConversationMessageSnapshot,
   toConversation,
   upsertConversationIndex
 } from '../agent'
@@ -29,7 +31,16 @@ export function registerConversationIpc(ipcMain: IpcMain, store: Store): void {
 
     const graph = buildAgentGraph(getStoredLLMConfig(store))
     const state = await graph.getState({ configurable: { thread_id: conversationId } })
-    return messagesToUiMessages(state.values.messages || [])
+    const checkpointMessages = messagesToUiMessages(state.values.messages || [])
+    if (checkpointMessages.length > 0) {
+      return checkpointMessages
+    }
+
+    const snapshotMessages = getConversationMessageSnapshot(store, conversationId)
+    if (snapshotMessages.length > 0) {
+      await seedThreadMessages(graph, conversationId, snapshotMessages)
+    }
+    return snapshotMessages
   })
 
   ipcMain.handle('create-conversation', async () => {
@@ -46,6 +57,7 @@ export function registerConversationIpc(ipcMain: IpcMain, store: Store): void {
   ipcMain.handle('delete-conversation', async (_event, conversationId: string) => {
     if (!conversationId) return false
     removeConversationIndex(store, conversationId)
+    removeConversationMessageSnapshot(store, conversationId)
     try {
       const checkpointer = getCheckpointer()
       if ('deleteThread' in checkpointer && typeof checkpointer.deleteThread === 'function') {

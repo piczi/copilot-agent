@@ -2,7 +2,8 @@ import { ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
 import type { ChatStreamPayload } from '@/shared/ipc'
-import { APPROVAL_TTL_MS } from './constants'
+import type { ApprovalKind } from '@/shared/ipc'
+import { APPROVAL_TTL_MS } from '@/shared/ipc'
 
 export function sendChatStreamEvent(sender: WebContents, requestId: string, payload: ChatStreamPayload): void {
   if (!sender.isDestroyed()) {
@@ -15,7 +16,8 @@ export function requestCommandApproval(
   requestId: string,
   command: string,
   reason: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  approvalKind: ApprovalKind = 'command'
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const approvalId = randomUUID()
@@ -44,9 +46,11 @@ export function requestCommandApproval(
     signal.addEventListener('abort', abort, { once: true })
     sendChatStreamEvent(sender, requestId, {
       type: 'approval_required',
+      requestId,
       approvalId,
       command,
-      reason
+      reason,
+      approvalKind
     })
   })
 }

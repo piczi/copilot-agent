@@ -47,5 +47,11 @@ Read full details in [ARCHITECTURE.md](../../ARCHITECTURE.md). Summary for codin
 ## Security
 
 - Tools run in main process only. `exec_bash` uses `security/commandPolicy.ts` + IPC approval.
+- `fetch_url` uses `security/urlPolicy.ts` (SSRF protection) + IPC approval in restricted mode.
 - File access via `security/pathPolicy.ts` (workspace roots only).
 - Store IPC keys whitelisted in `electron/agent/constants.ts`.
+
+## Escalation
+
+- Cross-tool escalation behavior lives in `SYSTEM_PROMPT`; per-tool fallback paths live in tool `description`.
+- Refusal retry guard: `electron/agent/refusal-guard.ts` + `stream-adapter.ts`.
