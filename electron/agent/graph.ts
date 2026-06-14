@@ -23,6 +23,7 @@ import { getRuntimePlatformInstruction } from './platform'
 import { createPrefetchedMessages } from './prefetch'
 import { ALL_TOOLS } from './tools'
 import { getCheckpointer } from './checkpointer'
+import { prepareMessagesForModel } from './messages'
 import type { AgentRuntimeContext } from './context'
 import { RUNTIME_CONTEXT_KEY, getRuntimeContext } from './context'
 import { createContentRouter } from './content-router'
@@ -67,12 +68,7 @@ async function prefetchNode(state: typeof AgentState.State): Promise<{ messages:
     return { messages: [] }
   }
 
-  return {
-    messages: [
-      ...state.messages.slice(0, -1),
-      ...prefetched
-    ]
-  }
+  return { messages: prefetched }
 }
 
 function createAgentNode(llmConfig: LLMConfig) {
@@ -85,7 +81,8 @@ function createAgentNode(llmConfig: LLMConfig) {
     let reasoningStarted = false
     let gathered: AIMessageChunk | undefined
 
-    const stream = await model.stream(state.messages, config)
+    const modelMessages = prepareMessagesForModel(state.messages)
+    const stream = await model.stream(modelMessages, config)
     for await (const chunk of stream) {
       if (!AIMessageChunk.isInstance(chunk)) continue
       gathered = gathered ? gathered.concat(chunk) : chunk

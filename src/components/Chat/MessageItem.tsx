@@ -2,7 +2,6 @@ import React from 'react'
 import { Message } from '@/types'
 import { parseMessage } from '@/utils/parseMessage'
 import VisualRenderer from '@/components/Visuals/VisualRenderer'
-import VisualSkeleton from '@/components/Visuals/VisualSkeleton'
 import MarkdownContent from '@/components/MarkdownContent'
 import StreamingMarkdown from '@/components/StreamingText/StreamingMarkdown'
 import ThinkingPanel from '@/components/ThinkingPanel'
@@ -57,9 +56,7 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, isStreaming = false 
           )
         )}
         {isStreaming && pendingVisualType && (
-          <div>
-            <VisualSkeleton type={pendingVisualType} />
-          </div>
+          <p className="px-1 text-xs text-muted-foreground/50">正在生成...</p>
         )}
       </div>
     </div>

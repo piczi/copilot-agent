@@ -129,3 +129,44 @@ export function getLastUserText(messages: BaseMessage[]): string {
   }
   return ''
 }
+
+const PREFETCH_TOOL_CALL_ID = /^fetch_(?:weather|crypto|gold|exchange_rate)_/i
+
+function isPrefetchedAssistantTurn(message: AIMessage): boolean {
+  if (!message.tool_calls?.length) return false
+  return message.tool_calls.every((call) => PREFETCH_TOOL_CALL_ID.test(call.id || ''))
+}
+
+function dedupeConsecutiveHumanMessages(messages: BaseMessage[]): BaseMessage[] {
+  const result: BaseMessage[] = []
+  for (const message of messages) {
+    const previous = result[result.length - 1]
+    if (HumanMessage.isInstance(message) && HumanMessage.isInstance(previous)) {
+      const current = typeof message.content === 'string' ? message.content : ''
+      const prior = typeof previous.content === 'string' ? previous.content : ''
+      if (current === prior) continue
+    }
+    result.push(message)
+  }
+  return result
+}
+
+/** Strip synthetic prefetch fields and legacy checkpoint artifacts before LLM calls. */
+export function prepareMessagesForModel(messages: BaseMessage[]): BaseMessage[] {
+  const deduped = dedupeConsecutiveHumanMessages(messages)
+  return deduped.map((message) => {
+    if (!AIMessage.isInstance(message) || !isPrefetchedAssistantTurn(message)) {
+      return message
+    }
+
+    const kwargs = { ...(message.additional_kwargs || {}) }
+    delete kwargs.reasoning_content
+
+    return new AIMessage({
+      id: message.id,
+      content: message.content,
+      tool_calls: message.tool_calls,
+      additional_kwargs: Object.keys(kwargs).length > 0 ? kwargs : undefined
+    })
+  })
+}

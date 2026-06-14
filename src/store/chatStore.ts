@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { CommandMode, Conversation, Message } from '@/types'
 import type { ConversationIndexEntry } from '@/shared/ipc'
+import { isDraftConversationEntry } from '@/shared/ipc'
 
 interface ChatState {
   conversations: Conversation[]
@@ -66,8 +67,8 @@ async function fetchMessages(conversationId: string): Promise<Message[]> {
 }
 
 async function findOrCreateEmptyConversation(
-  conversations: Conversation[]
-): Promise<{ conversations: Conversation[]; activeId: string; messages: Message[] }> {
+  index: ConversationIndexEntry[]
+): Promise<{ index: ConversationIndexEntry[]; activeId: string; reusedDraft: boolean }> {
   if (typeof window === 'undefined' || !window.electronAPI?.createConversation) {
     const fallback: Conversation = {
       id: crypto.randomUUID(),
@@ -76,27 +77,31 @@ async function findOrCreateEmptyConversation(
       createdAt: Date.now(),
       updatedAt: Date.now()
     }
+    const entry: ConversationIndexEntry = {
+      id: fallback.id,
+      title: fallback.title,
+      createdAt: fallback.createdAt,
+      updatedAt: fallback.updatedAt,
+      isDraft: true
+    }
     return {
-      conversations: [fallback, ...conversations],
+      index: [entry],
       activeId: fallback.id,
-      messages: []
+      reusedDraft: false
     }
   }
 
-  for (const conversation of conversations) {
-    if (conversation.title !== DEFAULT_TITLE) continue
-    const messages = await fetchMessages(conversation.id)
-    if (messages.length === 0) {
-      return { conversations, activeId: conversation.id, messages: [] }
-    }
+  const draft = index.find(isDraftConversationEntry)
+  if (draft) {
+    return { index, activeId: draft.id, reusedDraft: true }
   }
 
   const created = await window.electronAPI.createConversation()
-  const entry = indexToConversation(created)
+  const freshIndex = await window.electronAPI.listConversations()
   return {
-    conversations: [entry, ...conversations.filter((item) => item.id !== entry.id)],
-    activeId: entry.id,
-    messages: []
+    index: freshIndex,
+    activeId: created.id,
+    reusedDraft: false
   }
 }
 
@@ -314,17 +319,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return
     }
 
+    const listedIndex = await window.electronAPI.listConversations()
+    const { activeId, reusedDraft } = await findOrCreateEmptyConversation(listedIndex)
+
+    if (reusedDraft && window.electronAPI.bumpConversation) {
+      await window.electronAPI.bumpConversation(activeId)
+    }
+
     const index = await window.electronAPI.listConversations()
     const conversations = index.map((entry) => indexToConversation(entry))
-    const { conversations: nextConversations, activeId, messages } =
-      await findOrCreateEmptyConversation(conversations)
 
     set({
-      conversations: nextConversations.map((conversation) => (
-        conversation.id === activeId ? { ...conversation, messages } : conversation
-      )),
+      conversations,
       activeConversationId: activeId
     })
+
+    const messages = await fetchMessages(activeId)
+    set((state) => ({
+      conversations: updateConversation(state.conversations, activeId, (conversation) => ({
+        ...conversation,
+        messages
+      }))
+    }))
   },
 
   touchConversation: async (conversationId, message) => {

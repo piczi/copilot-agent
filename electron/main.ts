@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import StoreModule from 'electron-store'
 import { initCheckpointer } from './agent/checkpointer'
+import { initializeConversationStorage } from './agent/conversation-init'
 import { registerChatIpc } from './ipc/chat'
 import { registerConversationIpc } from './ipc/conversations'
 import { registerLlmConfigIpc } from './ipc/llm-config'
@@ -86,6 +87,7 @@ app.on('activate', () => {
 app.whenReady().then(async () => {
   await initCheckpointer()
   registerIpcHandlers()
+  await initializeConversationStorage(store)
   Menu.setApplicationMenu(null)
   createWindow()
 })

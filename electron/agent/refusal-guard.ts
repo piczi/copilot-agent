@@ -1,4 +1,4 @@
-import { AIMessage, type BaseMessage } from '@langchain/core/messages'
+import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages'
 
 const REFUSAL_PATTERNS = [
   /无法完成/,
@@ -56,10 +56,64 @@ export function getLastAssistantText(messages: BaseMessage[]): string {
   return ''
 }
 
-export function shouldRetryRefusal(userMessage: string, assistantContent: string): boolean {
+function findLastUserMessageIndex(messages: BaseMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (HumanMessage.isInstance(messages[index])) {
+      return index
+    }
+  }
+  return -1
+}
+
+export function isSuccessfulToolResult(content: string): boolean {
+  const trimmed = content.trim()
+  if (!trimmed) return false
+  if (trimmed.includes('命令已取消')) return false
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>
+    if (typeof parsed.error === 'string' && parsed.error.trim()) return false
+    if ('exitCode' in parsed) {
+      return parsed.exitCode === 0
+    }
+    if (parsed.ok === false) return false
+    if (typeof parsed.status === 'number' && parsed.status >= 400) return false
+    return true
+  } catch {
+    return true
+  }
+}
+
+export function hasSuccessfulToolExecutionSince(messages: BaseMessage[], userMessageIndex: number): boolean {
+  if (userMessageIndex < 0) return false
+
+  for (let index = userMessageIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (!ToolMessage.isInstance(message)) continue
+    const content = typeof message.content === 'string' ? message.content : ''
+    if (isSuccessfulToolResult(content)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+export function shouldRetryRefusal(
+  userMessage: string,
+  assistantContent: string,
+  messages: BaseMessage[] = []
+): boolean {
   if (!assistantContent.trim()) return false
   if (!isLikelyFactualRequest(userMessage)) return false
-  return isLikelyRefusal(assistantContent)
+  if (!isLikelyRefusal(assistantContent)) return false
+
+  const userMessageIndex = findLastUserMessageIndex(messages)
+  if (hasSuccessfulToolExecutionSince(messages, userMessageIndex)) {
+    return false
+  }
+
+  return true
 }
 
 export const REFUSAL_RETRY_PROMPT = [

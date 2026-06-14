@@ -1,5 +1,4 @@
 import type { WebContents } from 'electron'
-import { HumanMessage, type BaseMessage } from '@langchain/core/messages'
 import type { CommandMode, LLMConfig, Message } from '@/shared/types'
 import type { ChatStreamPayload } from '@/shared/ipc'
 import { sendChatStreamEvent, requestCommandApproval } from './approval'
@@ -12,7 +11,6 @@ import {
 } from './graph'
 import { runLocalCommand } from './llm-config'
 import { messagesToUiMessages, syncVisibleTextToCheckpoint } from './messages'
-import { createPrefetchedMessages } from './prefetch'
 import {
   buildErrorRecoveryPrompt,
   createInternalSystemMessage,
@@ -60,19 +58,10 @@ async function buildInputMessages(
   graph: ReturnType<typeof buildAgentGraph>,
   conversationId: string,
   message: string
-): Promise<BaseMessage[]> {
+) {
   const state = await graph.getState({ configurable: { thread_id: conversationId } })
   const existingMessages = state.values.messages || []
   const isNewThread = existingMessages.length === 0
-
-  const prefetched = await createPrefetchedMessages(message)
-  if (prefetched) {
-    const systemMessages = isNewThread
-      ? buildInitialMessages(message, true).filter((item) => !(item instanceof HumanMessage))
-      : []
-    return [...systemMessages, ...prefetched]
-  }
-
   return buildInitialMessages(message, isNewThread)
 }
 
@@ -136,7 +125,7 @@ async function maybeRetryRefusal(
   const state = await graph.getState(config)
   const messages = state.values.messages || []
   const assistantContent = getLastAssistantText(messages)
-  if (!shouldRetryRefusal(userMessage, assistantContent)) {
+  if (!shouldRetryRefusal(userMessage, assistantContent, messages)) {
     return false
   }
 

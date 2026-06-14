@@ -4,10 +4,15 @@ import type { Conversation, Message } from '@/shared/types'
 import {
   CONVERSATION_INDEX_KEY,
   CONVERSATION_MESSAGE_SNAPSHOTS_KEY,
-  LEGACY_CONVERSATIONS_KEY
+  LEGACY_CONVERSATIONS_KEY,
+  MAX_CONVERSATIONS
 } from './constants'
 
 const DEFAULT_TITLE = '新对话'
+
+export interface CheckpointerWithDelete {
+  deleteThread?: (threadId: string) => Promise<void>
+}
 
 function isMessage(value: unknown): value is Message {
   if (!value || typeof value !== 'object') return false
@@ -20,30 +25,97 @@ function isMessage(value: unknown): value is Message {
   )
 }
 
-export function getConversationIndex(store: Store): ConversationIndexEntry[] {
-  const stored = store.get(CONVERSATION_INDEX_KEY)
-  if (!Array.isArray(stored)) return []
-  return stored
-    .filter((item): item is ConversationIndexEntry => Boolean(item && typeof item === 'object' && typeof (item as ConversationIndexEntry).id === 'string'))
-    .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
+function isIndexEntry(value: unknown): value is ConversationIndexEntry {
+  return Boolean(value && typeof value === 'object' && typeof (value as ConversationIndexEntry).id === 'string')
 }
 
-export function upsertConversationIndex(
+function readRawConversationIndex(store: Store): ConversationIndexEntry[] {
+  const stored = store.get(CONVERSATION_INDEX_KEY)
+  if (!Array.isArray(stored)) return []
+  return stored.filter(isIndexEntry)
+}
+
+function sortConversationEntries(entries: ConversationIndexEntry[]): ConversationIndexEntry[] {
+  return [...entries].sort(
+    (a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || b.id.localeCompare(a.id)
+  )
+}
+
+function pruneSnapshotsToIndex(store: Store, index: ConversationIndexEntry[]): void {
+  const allowedIds = new Set(index.map((item) => item.id))
+  const stored = store.get(CONVERSATION_MESSAGE_SNAPSHOTS_KEY)
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return
+
+  const current = stored as Record<string, unknown>
+  const next: Record<string, Message[]> = {}
+  for (const id of allowedIds) {
+    const existing = current[id]
+    if (Array.isArray(existing)) {
+      next[id] = existing.filter(isMessage)
+    }
+  }
+  store.set(CONVERSATION_MESSAGE_SNAPSHOTS_KEY, next)
+}
+
+export async function purgeConversationData(
   store: Store,
-  entry: ConversationIndexEntry
-): ConversationIndexEntry[] {
-  const current = getConversationIndex(store)
-  const next = [entry, ...current.filter((item) => item.id !== entry.id)]
-    .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
-    .slice(0, 50)
-  store.set(CONVERSATION_INDEX_KEY, next)
-  return next
+  conversationId: string,
+  checkpointer?: CheckpointerWithDelete | null
+): Promise<void> {
+  removeConversationMessageSnapshot(store, conversationId)
+  try {
+    if (checkpointer && 'deleteThread' in checkpointer && typeof checkpointer.deleteThread === 'function') {
+      await checkpointer.deleteThread(conversationId)
+    }
+  } catch {
+    // ignore checkpoint delete failures
+  }
+}
+
+export async function pruneConversationIndex(
+  store: Store,
+  checkpointer?: CheckpointerWithDelete | null
+): Promise<ConversationIndexEntry[]> {
+  const sorted = sortConversationEntries(readRawConversationIndex(store))
+  const kept = sorted.slice(0, MAX_CONVERSATIONS)
+  const evicted = sorted.slice(MAX_CONVERSATIONS)
+
+  for (const entry of evicted) {
+    await purgeConversationData(store, entry.id, checkpointer)
+  }
+
+  pruneSnapshotsToIndex(store, kept)
+  store.set(CONVERSATION_INDEX_KEY, kept)
+  return kept
+}
+
+export function getConversationIndex(store: Store): ConversationIndexEntry[] {
+  return sortConversationEntries(readRawConversationIndex(store)).slice(0, MAX_CONVERSATIONS)
+}
+
+export async function upsertConversationIndex(
+  store: Store,
+  entry: ConversationIndexEntry,
+  checkpointer?: CheckpointerWithDelete | null
+): Promise<ConversationIndexEntry[]> {
+  const current = readRawConversationIndex(store)
+  const merged = sortConversationEntries([entry, ...current.filter((item) => item.id !== entry.id)])
+  const kept = merged.slice(0, MAX_CONVERSATIONS)
+  const evicted = merged.slice(MAX_CONVERSATIONS)
+
+  for (const removed of evicted) {
+    await purgeConversationData(store, removed.id, checkpointer)
+  }
+
+  pruneSnapshotsToIndex(store, kept)
+  store.set(CONVERSATION_INDEX_KEY, kept)
+  return kept
 }
 
 export function removeConversationIndex(store: Store, conversationId: string): ConversationIndexEntry[] {
-  const next = getConversationIndex(store).filter((item) => item.id !== conversationId)
+  const next = readRawConversationIndex(store).filter((item) => item.id !== conversationId)
   store.set(CONVERSATION_INDEX_KEY, next)
-  return next
+  return sortConversationEntries(next).slice(0, MAX_CONVERSATIONS)
 }
 
 export function getConversationMessageSnapshot(store: Store, conversationId: string): Message[] {
@@ -125,14 +197,28 @@ export async function migrateLegacyConversations(
     id: conversation.id,
     title: conversation.title || DEFAULT_TITLE,
     createdAt: conversation.createdAt || Date.now(),
-    updatedAt: conversation.updatedAt || Date.now()
+    updatedAt: conversation.updatedAt || Date.now(),
+    isDraft: !(conversation.messages?.length)
   }))
 
   if (migrated.length > 0) {
-    store.set(CONVERSATION_INDEX_KEY, migrated)
+    store.set(CONVERSATION_INDEX_KEY, sortConversationEntries(migrated).slice(0, MAX_CONVERSATIONS))
   }
 
-  return migrated
+  return getConversationIndex(store)
+}
+
+export async function bumpConversationActivity(
+  store: Store,
+  conversationId: string,
+  checkpointer?: CheckpointerWithDelete | null
+): Promise<ConversationIndexEntry | null> {
+  const existing = readRawConversationIndex(store).find((item) => item.id === conversationId)
+  if (!existing) return null
+
+  const entry = { ...existing, updatedAt: Date.now() }
+  await upsertConversationIndex(store, entry, checkpointer)
+  return entry
 }
 
 export function toConversation(entry: ConversationIndexEntry, messages: Message[] = []): Conversation {

@@ -1,7 +1,5 @@
 import { useRef, useEffect, useMemo } from 'react'
-import { Loader2 } from 'lucide-react'
 import { useChatStore } from '@/store/chatStore'
-import { Card } from '@/components/ui/card'
 import { chatContentClass } from '@/lib/layout'
 import MessageItem from './MessageItem'
 
@@ -40,12 +38,7 @@ const MessageList: React.FC = () => {
         ))}
 
         {isLoading && !hasAssistantResponseSignal && (
-          <div className="flex justify-start">
-            <Card className="flex items-center gap-2 border-border/60 bg-card/55 px-3 py-2 text-xs text-muted-foreground shadow-none">
-              <Loader2 size={13} className="animate-spin text-muted-foreground/70" />
-              <span>正在思考</span>
-            </Card>
-          </div>
+          <p className="px-1 text-xs text-muted-foreground/50">正在思考...</p>
         )}
       </div>
     </div>

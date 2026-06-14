@@ -1,3 +1,4 @@
+export const MAX_CONVERSATIONS = 50
 export const MAX_TOOL_TURNS = 10
 export const MAX_COMMAND_LENGTH = 2000
 export const MAX_OUTPUT_LENGTH = 100_000

@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createConversation: () => ipcRenderer.invoke('create-conversation'),
   deleteConversation: (conversationId: string) => ipcRenderer.invoke('delete-conversation', conversationId),
   touchConversation: (conversationId: string, message: string) => ipcRenderer.invoke('touch-conversation', conversationId, message),
+  bumpConversation: (conversationId: string) => ipcRenderer.invoke('bump-conversation', conversationId),
   chatCompletionStream: (
     requestId: string,
     message: string,

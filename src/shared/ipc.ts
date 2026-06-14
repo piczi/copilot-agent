@@ -36,4 +36,13 @@ export interface ConversationIndexEntry {
   title: string
   createdAt: number
   updatedAt: number
+  isDraft?: boolean
+}
+
+const DEFAULT_CONVERSATION_TITLE = '新对话'
+
+export function isDraftConversationEntry(entry: ConversationIndexEntry): boolean {
+  if (entry.isDraft === true) return true
+  if (entry.isDraft === false) return false
+  return entry.title === DEFAULT_CONVERSATION_TITLE && entry.updatedAt === entry.createdAt
 }

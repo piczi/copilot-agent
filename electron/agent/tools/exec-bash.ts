@@ -38,9 +38,6 @@ export const execBashTool = tool(
 
     const baseText = runtime.visibleTextRef.current.replace(/\s+$/, '')
     const separator = baseText ? '\n\n' : ''
-    const pendingText = `${baseText}${separator}${createTerminalBlock(trimmedCommand, getPlatformName(), '命令由大模型生成，正在真实执行...', null)}`
-    runtime.visibleTextRef.current = pendingText
-    runtime.emit({ type: 'replace_text', chunk: pendingText })
 
     if (runtime.commandMode === 'restricted' && restrictedCommandNeedsApproval(trimmedCommand)) {
       const reason = getCommandApprovalReason(trimmedCommand)
@@ -76,10 +73,13 @@ export const execBashTool = tool(
     name: 'exec_bash',
     description: [
       '真实执行当前电脑上的系统命令，作为兜底 escalator 处理其他专用工具无法覆盖的只读任务。',
-      '适用：系统信息查询、文本处理管道、专用工具失败后的只读诊断、fetch_url 无法覆盖但可用单行只读命令完成的场景。',
+      '适用：专用工具失败后的只读诊断、fetch_url 无法覆盖但可用只读命令完成的场景。',
       '禁止用 curl/wget 重复抓取天气、汇率、加密货币、黄金等已接入专用数据；这类数据应使用对应专用工具。',
       '读取单个文件或列出目录时不要使用本工具，应优先 read_file、list_directory。',
       'Windows 使用 PowerShell，macOS/Linux 使用 /bin/sh -c。',
+      '每次用户请求内尽量少调用；每次调用应使用户目标前进一步。',
+      '禁止对同一事实用等价命令重复查询；需要多个相关字段时，优先单条只读命令输出结构化结果（如 JSON），而非多次调用各取一项。',
+      '已有足够输出即可回答时，不得再次调用本工具。',
       'restricted 模式下高风险、写入、网络请求或组合命令会请求用户审批；仍应尝试，不要因可能需要审批而直接拒绝。',
       'dangerous 模式下用户已允许直接执行。'
     ].join(' '),

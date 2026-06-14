@@ -23,6 +23,7 @@ declare global {
       createConversation: () => Promise<{ id: string; title: string; messages: Message[]; createdAt: number; updatedAt: number }>
       deleteConversation: (conversationId: string) => Promise<boolean>
       touchConversation: (conversationId: string, message: string) => Promise<ConversationIndexEntry | null>
+      bumpConversation: (conversationId: string) => Promise<ConversationIndexEntry | null>
       execCommand: (
         command: string,
         options?: { cwd?: string; mode?: CommandMode; approvalToken?: string }

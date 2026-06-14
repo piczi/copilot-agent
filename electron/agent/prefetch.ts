@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages'
+import { type BaseMessage } from '@langchain/core/messages'
 import { fetchCrypto, resolveCoinId } from '@/services/crypto'
 import { fetchExchangeRate } from '@/services/exchange-rate'
 import { fetchGold } from '@/services/gold'
 import { fetchWeather } from '@/services/weather'
+import { createInternalSystemMessage } from './internal-messages'
 
 const CURRENCY_ALIASES: Record<string, string> = {
   usd: 'USD',
@@ -136,30 +137,27 @@ export function extractHistoryDays(message: string): number | undefined {
   return Number.isFinite(days) && days > 0 ? days : undefined
 }
 
-async function buildPrefetchedToolTurn(
-  message: string,
+/** Inject prefetched data as internal context — avoids synthetic tool turns that break thinking-mode APIs. */
+async function buildPrefetchedContextMessage(
   toolName: string,
   args: Record<string, unknown>,
-  reasoning: string,
   fetchResult: () => Promise<string>
 ): Promise<BaseMessage[]> {
-  const toolCallId = `${toolName}_${randomUUID()}`
-  return [
-    new HumanMessage(message),
-    new AIMessage({
-      content: '',
-      tool_calls: [{
-        id: toolCallId,
-        name: toolName,
-        args
-      }],
-      additional_kwargs: { reasoning_content: reasoning }
-    }),
-    new ToolMessage({
-      content: await fetchResult(),
-      tool_call_id: toolCallId,
-      name: toolName
+  let toolContent: string
+  try {
+    toolContent = await fetchResult()
+  } catch (err) {
+    toolContent = JSON.stringify({
+      error: `预取失败: ${err instanceof Error ? err.message : String(err)}`
     })
+  }
+
+  return [
+    createInternalSystemMessage([
+      `已为当前用户问题预取 ${toolName} 数据（参数: ${JSON.stringify(args)}）。`,
+      '请直接基于以下真实数据回答用户；不要声称无法获取；不要再次调用相同专用工具重复抓取。',
+      toolContent
+    ].join('\n\n'))
   ]
 }
 
@@ -168,11 +166,9 @@ async function createWeatherToolMessages(message: string): Promise<BaseMessage[]
   const city = extractWeatherCity(message)
   if (!city) return undefined
 
-  return buildPrefetchedToolTurn(
-    message,
+  return buildPrefetchedContextMessage(
     'fetch_weather',
     { city },
-    `需要获取 "${city}" 的真实天气数据。`,
     async () => JSON.stringify(await fetchWeather(city), null, 2)
   )
 }
@@ -182,11 +178,9 @@ async function createCryptoToolMessages(message: string): Promise<BaseMessage[] 
   const coinId = extractCryptoCoinId(message)
   if (!coinId) return undefined
 
-  return buildPrefetchedToolTurn(
-    message,
+  return buildPrefetchedContextMessage(
     'fetch_crypto',
     { coinId },
-    `需要获取 "${coinId}" 的真实加密货币行情数据。`,
     async () => JSON.stringify(await fetchCrypto(resolveCoinId(coinId)), null, 2)
   )
 }
@@ -194,11 +188,9 @@ async function createCryptoToolMessages(message: string): Promise<BaseMessage[] 
 async function createGoldToolMessages(message: string): Promise<BaseMessage[] | undefined> {
   if (!isGoldQuery(message)) return undefined
   const days = extractGoldDays(message)
-  return buildPrefetchedToolTurn(
-    message,
+  return buildPrefetchedContextMessage(
     'fetch_gold',
     { days },
-    `需要获取最近 ${days} 天的真实黄金价格数据。`,
     async () => JSON.stringify(await fetchGold(days), null, 2)
   )
 }
@@ -214,11 +206,9 @@ async function createExchangeRateToolMessages(message: string): Promise<BaseMess
   }
   if (pair.days) args.days = pair.days
 
-  return buildPrefetchedToolTurn(
-    message,
+  return buildPrefetchedContextMessage(
     'fetch_exchange_rate',
     args,
-    `需要获取 ${pair.base}/${pair.target} 的真实汇率数据。`,
     async () => JSON.stringify(await fetchExchangeRate(pair.base, pair.target, pair.days), null, 2)
   )
 }

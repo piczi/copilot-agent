@@ -8,9 +8,13 @@ export {
   getConversationIndex,
   deriveTitleFromMessage,
   migrateLegacyConversations,
+  pruneConversationIndex,
+  purgeConversationData,
   removeConversationIndex,
   removeConversationMessageSnapshot,
   toConversation,
+  bumpConversationActivity,
   upsertConversationIndex,
   upsertConversationMessageSnapshot
 } from './conversation-index'
+export { initializeConversationStorage } from './conversation-init'

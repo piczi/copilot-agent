@@ -2,29 +2,23 @@ import type { IpcMain } from 'electron'
 import type Store from 'electron-store'
 import { randomUUID } from 'node:crypto'
 import {
-  buildAgentGraph,
   deriveTitleFromMessage,
   getConversationIndex,
   getConversationMessageSnapshot,
   messagesToUiMessages,
-  migrateLegacyConversations,
+  purgeConversationData,
   seedThreadMessages,
   removeConversationIndex,
-  removeConversationMessageSnapshot,
+  bumpConversationActivity,
   toConversation,
   upsertConversationIndex
 } from '../agent'
-import { getStoredLLMConfig } from '../agent/llm-config'
+import { buildAgentGraph } from '../agent/graph'
 import { getCheckpointer } from '../agent/checkpointer'
+import { getStoredLLMConfig } from '../agent/llm-config'
 
 export function registerConversationIpc(ipcMain: IpcMain, store: Store): void {
-  ipcMain.handle('list-conversations', async () => {
-    const graph = buildAgentGraph(getStoredLLMConfig(store))
-    await migrateLegacyConversations(store, async (conversationId, messages) => {
-      await seedThreadMessages(graph, conversationId, messages)
-    })
-    return getConversationIndex(store)
-  })
+  ipcMain.handle('list-conversations', () => getConversationIndex(store))
 
   ipcMain.handle('get-conversation-messages', async (_event, conversationId: string) => {
     if (!conversationId) return []
@@ -44,28 +38,22 @@ export function registerConversationIpc(ipcMain: IpcMain, store: Store): void {
   })
 
   ipcMain.handle('create-conversation', async () => {
+    const now = Date.now()
     const entry = {
       id: randomUUID(),
       title: '新对话',
-      createdAt: Date.now(),
-      updatedAt: Date.now()
+      createdAt: now,
+      updatedAt: now,
+      isDraft: true
     }
-    upsertConversationIndex(store, entry)
+    await upsertConversationIndex(store, entry, getCheckpointer())
     return toConversation(entry)
   })
 
   ipcMain.handle('delete-conversation', async (_event, conversationId: string) => {
     if (!conversationId) return false
     removeConversationIndex(store, conversationId)
-    removeConversationMessageSnapshot(store, conversationId)
-    try {
-      const checkpointer = getCheckpointer()
-      if ('deleteThread' in checkpointer && typeof checkpointer.deleteThread === 'function') {
-        await checkpointer.deleteThread(conversationId)
-      }
-    } catch {
-      // ignore checkpoint delete failures
-    }
+    await purgeConversationData(store, conversationId, getCheckpointer())
     return true
   })
 
@@ -80,9 +68,15 @@ export function registerConversationIpc(ipcMain: IpcMain, store: Store): void {
         ? existing.title
         : deriveTitleFromMessage(message),
       createdAt: existing?.createdAt || now,
-      updatedAt: now
+      updatedAt: now,
+      isDraft: false
     }
-    upsertConversationIndex(store, entry)
+    await upsertConversationIndex(store, entry, getCheckpointer())
     return entry
+  })
+
+  ipcMain.handle('bump-conversation', async (_event, conversationId: string) => {
+    if (!conversationId) return null
+    return bumpConversationActivity(store, conversationId, getCheckpointer())
   })
 }
