@@ -7,10 +7,13 @@ alwaysApply: true
 
 When adding or changing assistant capabilities in this project, keep tool awareness out of the system prompt.
 
-- Register capabilities through the chat tool protocol in `electron/main.ts` using `CHAT_TOOLS`.
-- Put tool names, descriptions, parameter schemas, and tool-specific data contracts in the tool registration, not in `SYSTEM_PROMPT`.
-- Implement each registered tool in the main-process execution loop for both streaming and non-streaming paths.
-- For visual output, expose a controlled rendering tool such as `render_visual`; do not teach the model to hand-write `visual:*`, XML, JSX, HTML, or custom component tags in the system prompt.
-- Keep `SYSTEM_PROMPT` focused on behavior: truthfulness, when real data is required, non-disclosure of internal details, safety boundaries, conversation context, and response style.
-- If a capability is advertised to users, it must be backed by a registered tool or deterministic application logic.
+- Register capabilities as LangChain tools in `electron/agent/tools/` and export from `electron/agent/tools/index.ts` (`ALL_TOOLS`).
+- Put tool names, descriptions, parameter schemas, and tool-specific data contracts in each tool's `description` + Zod schema, not in `SYSTEM_PROMPT`.
+- Tool execution is handled by LangGraph `ToolNode` in `electron/agent/graph.ts` (single path; no separate non-streaming loop).
+- For visual output, use `render_visual` in `electron/agent/tools/render-visual.ts`; do not teach the model to hand-write `visual:*`, XML, JSX, HTML, or custom component tags in the system prompt.
+- Keep `SYSTEM_PROMPT` (`src/agent/prompts/system.ts`) focused on behavior: truthfulness, when real data is required, non-disclosure of internal details, safety boundaries, conversation context, and response style.
+- If a capability is advertised to users, it must be backed by a registered tool or deterministic application logic (e.g. `electron/agent/prefetch.ts`).
 - Never expose internal tool names, schemas, rendering protocols, command internals, or execution details to the user-facing answer.
+- Side effects (IPC `replace_text`, command approval) go through `AgentRuntimeContext` in `electron/agent/context.ts`, injected via `config.configurable` — not via prompt instructions.
+
+See [ARCHITECTURE.md](../../ARCHITECTURE.md) for full module map and iteration checklist.

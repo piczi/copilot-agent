@@ -39,8 +39,8 @@ const ConversationList: React.FC = () => {
             key={conv.id}
             conversation={conv}
             isActive={conv.id === activeConversationId}
-            onClick={() => setActiveConversation(conv.id)}
-            onDelete={() => deleteConversation(conv.id)}
+            onClick={() => { void setActiveConversation(conv.id) }}
+            onDelete={() => { void deleteConversation(conv.id) }}
           />
         ))}
       </AnimatePresence>

@@ -7,9 +7,10 @@ An Electron desktop app for chatting with an AI agent and rendering rich visual 
 - Electron + electron-vite
 - React 19 + TypeScript
 - Tailwind CSS
-- LangChain / LangGraph
+- LangChain.js + LangGraph (custom StateGraph in main process)
 - Zustand
 - ECharts
+- SqliteSaver checkpointer for conversation history
 
 ## Getting Started
 
@@ -31,19 +32,29 @@ Build the app:
 npm run build
 ```
 
-Preview the production build:
+Run tests:
 
 ```bash
-npm run preview
+npm test
 ```
 
-## Project Structure
+## Architecture
 
 ```text
-electron/   Electron main and preload processes
-src/        React UI, agent logic, state, services, and shared types
-out/        Generated build output, ignored by Git
+electron/
+  main.ts                 # Electron entry + IPC registration
+  agent/                  # LangGraph agent engine (tools, graph, stream adapter)
+  ipc/                    # IPC handlers (chat, conversations, llm-config, store)
+src/
+  agent/                  # Renderer bridge + prompts + LLM settings UI helpers
+  shared/                 # Shared types, IPC contracts, visual type constants
+  components/             # React UI
+  services/               # External data APIs used by main-process tools
 ```
+
+Agent logic runs in the **main process** for security (API keys, command execution, file access). The renderer sends `conversationId` + message via IPC; conversation history is persisted in SQLite via LangGraph checkpointer.
+
+For architecture details and iteration guidelines, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Notes
 

@@ -77,7 +77,6 @@ function App() {
   const [hasSavedApiKey, setHasSavedApiKey] = useState(false)
 
   const loadConversations = useChatStore((s) => s.loadConversations)
-  const persistConversations = useChatStore((s) => s.persistConversations)
   const createConversation = useChatStore((s) => s.createConversation)
 
   useEffect(() => {
@@ -92,14 +91,6 @@ function App() {
   useEffect(() => {
     loadConversations()
   }, [loadConversations])
-
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      persistConversations()
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-  }, [persistConversations])
 
   useEffect(() => {
     getLLMConfig().then((c) => {
@@ -168,12 +159,10 @@ function App() {
     const activeId = useChatStore.getState().activeConversationId
     const conversations = useChatStore.getState().conversations
     const activeConv = conversations.find((c) => c.id === activeId)
-    // 如果当前对话已经是空的，不再创建新对话
     if (activeConv && activeConv.messages.length === 0) {
       return
     }
-    createConversation()
-    persistConversations()
+    void createConversation()
   }
 
   const selectedProvider = PROVIDERS.find((p) => p.value === config.provider)

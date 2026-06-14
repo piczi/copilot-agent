@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { executeAgentStream } from '@/agent'
 import { useChatStore } from '@/store/chatStore'
-import { ChatHistoryMessage, Message } from '@/types'
+import { Message } from '@/types'
 
 const STREAM_FLUSH_INTERVAL_MS = 48
 
@@ -67,26 +67,14 @@ export function useSendMessage() {
   const setLoading = useChatStore((s) => s.setLoading)
   const isLoading = useChatStore((s) => s.isLoading)
   const setAbortController = useChatStore((s) => s.setAbortController)
-  const persistConversations = useChatStore((s) => s.persistConversations)
+  const touchConversation = useChatStore((s) => s.touchConversation)
 
   return useCallback(
     async () => {
       const trimmed = inputText.trim()
       if (!trimmed || isLoading) return
       const conversationId = activeConversationId
-      const conversation = useChatStore
-        .getState()
-        .conversations
-        .find((item) => item.id === conversationId)
-      const history: ChatHistoryMessage[] = (conversation?.messages || [])
-        .filter((message): message is Message & ChatHistoryMessage =>
-          (message.role === 'user' || message.role === 'assistant') &&
-          message.content.trim().length > 0
-        )
-        .map((message) => ({
-          role: message.role,
-          content: message.content
-        }))
+      if (!conversationId) return
 
       const userMsg: Message = {
         id: crypto.randomUUID(),
@@ -96,6 +84,7 @@ export function useSendMessage() {
       }
       addMessage(userMsg)
       setInputText('')
+      void touchConversation(conversationId, trimmed)
 
       const assistantMsgId = crypto.randomUUID()
       const assistantMsg: Message = {
@@ -117,9 +106,9 @@ export function useSendMessage() {
 
       try {
         const { thinking } = await executeAgentStream(
+          conversationId,
           trimmed,
           commandMode,
-          history,
           (chunk, complete) => {
             if (complete) {
               thinkingBuffer.flushNow()
@@ -140,7 +129,6 @@ export function useSendMessage() {
         )
         contentBuffer.flushNow()
         thinkingBuffer.flushNow()
-        // Some providers return thinking inside content instead of reasoning chunks.
         if (thinking && thinking.length > 0) {
           updateMessage(assistantMsgId, { thinking, thinkingComplete: true }, conversationId)
         }
@@ -160,7 +148,6 @@ export function useSendMessage() {
           setLoading(false)
           setAbortController(null)
         }
-        persistConversations()
       }
     },
     [
@@ -177,7 +164,7 @@ export function useSendMessage() {
       setInputText,
       setLoading,
       setAbortController,
-      persistConversations
+      touchConversation
     ]
   )
 }

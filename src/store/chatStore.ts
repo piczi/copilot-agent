@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { CommandMode, Conversation, Message } from '@/types'
-import { loadConversations, saveConversations } from './conversationPersistence'
+import type { ConversationIndexEntry } from '@/shared/ipc'
 
 interface ChatState {
   conversations: Conversation[]
@@ -10,7 +10,6 @@ interface ChatState {
   commandMode: CommandMode
   abortController: AbortController | null
 
-  // Message mutations (keep existing signatures, route through active conversation)
   addMessage: (message: Message) => void
   addStreamingMessage: (message: Message) => void
   appendToMessage: (id: string, chunk: string, conversationId?: string) => void
@@ -23,12 +22,11 @@ interface ChatState {
   setAbortController: (controller: AbortController | null) => void
   abort: () => void
 
-  // Conversation management
-  createConversation: () => string
-  deleteConversation: (id: string) => void
-  setActiveConversation: (id: string) => void
+  createConversation: () => Promise<string>
+  deleteConversation: (id: string) => Promise<void>
+  setActiveConversation: (id: string) => Promise<void>
   loadConversations: () => Promise<void>
-  persistConversations: () => Promise<void>
+  touchConversation: (conversationId: string, message: string) => Promise<void>
 }
 
 const DEFAULT_TITLE = '新对话'
@@ -38,64 +36,22 @@ function getInitialCommandMode(): CommandMode {
   return window.localStorage.getItem('command-mode') === 'dangerous' ? 'dangerous' : 'restricted'
 }
 
-function createEmptyConversation(): Conversation {
-  return {
-    id: crypto.randomUUID(),
-    title: DEFAULT_TITLE,
-    messages: [],
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  }
+function sortConversationsByActivity(a: Conversation, b: Conversation): number {
+  return b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || b.id.localeCompare(a.id)
 }
 
 function isEmptyConversation(conversation: Conversation): boolean {
   return conversation.messages.length === 0
 }
 
-function ensureSingleEmptyConversation(conversations: Conversation[]): {
-  conversations: Conversation[]
-  activeConversationId: string
-  changed: boolean
-} {
-  const sorted = [...conversations].sort(sortConversationsByActivity)
-  const emptyConversation = sorted.find(isEmptyConversation)
-
-  if (!emptyConversation) {
-    const newConv = createEmptyConversation()
-    return {
-      conversations: [newConv, ...sorted],
-      activeConversationId: newConv.id,
-      changed: true
-    }
-  }
-
-  const now = Date.now()
-  const activeEmptyConversation = {
-    ...emptyConversation,
-    title: emptyConversation.title || DEFAULT_TITLE,
-    updatedAt: now
-  }
-  const nonEmptyConversations = sorted.filter((conversation) => !isEmptyConversation(conversation))
-
+function indexToConversation(entry: ConversationIndexEntry, messages: Message[] = []): Conversation {
   return {
-    conversations: [activeEmptyConversation, ...nonEmptyConversations],
-    activeConversationId: activeEmptyConversation.id,
-    changed: sorted[0]?.id !== activeEmptyConversation.id || sorted.some((conversation) => (
-      isEmptyConversation(conversation) && conversation.id !== activeEmptyConversation.id
-    ))
+    id: entry.id,
+    title: entry.title || DEFAULT_TITLE,
+    messages,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt
   }
-}
-
-function mergeConversations(
-  storedConversations: Conversation[],
-  currentConversations: Conversation[]
-): Conversation[] {
-  if (currentConversations.length === 0) return storedConversations
-
-  const byId = new Map<string, Conversation>()
-  storedConversations.forEach((conversation) => byId.set(conversation.id, conversation))
-  currentConversations.forEach((conversation) => byId.set(conversation.id, conversation))
-  return Array.from(byId.values())
 }
 
 function updateConversation(
@@ -106,8 +62,11 @@ function updateConversation(
   return conversations.map((c) => (c.id === id ? updater(c) : c))
 }
 
-function sortConversationsByActivity(a: Conversation, b: Conversation): number {
-  return b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || b.id.localeCompare(a.id)
+async function fetchMessages(conversationId: string): Promise<Message[]> {
+  if (typeof window === 'undefined' || !window.electronAPI?.getConversationMessages) {
+    return []
+  }
+  return window.electronAPI.getConversationMessages(conversationId)
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -222,73 +181,139 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  createConversation: () => {
-    const { conversations, activeConversationId } = ensureSingleEmptyConversation(get().conversations)
+  createConversation: async () => {
+    if (typeof window !== 'undefined' && window.electronAPI?.createConversation) {
+      const emptyIds = get().conversations
+        .filter(isEmptyConversation)
+        .map((conversation) => conversation.id)
+      await Promise.all(
+        emptyIds.map((emptyId) => window.electronAPI!.deleteConversation(emptyId))
+      )
+
+      const created = await window.electronAPI.createConversation()
+      set((state) => ({
+        conversations: [
+          created,
+          ...state.conversations.filter((item) => !emptyIds.includes(item.id))
+        ],
+        activeConversationId: created.id,
+        inputText: '',
+        isLoading: false,
+        abortController: null
+      }))
+      return created.id
+    }
+
+    const fallback: Conversation = {
+      id: crypto.randomUUID(),
+      title: DEFAULT_TITLE,
+      messages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    }
     set({
-      conversations,
-      activeConversationId,
+      conversations: [fallback, ...get().conversations],
+      activeConversationId: fallback.id,
       inputText: '',
       isLoading: false,
       abortController: null
     })
-    return activeConversationId
+    return fallback.id
   },
 
-  deleteConversation: (id) => {
-    set((state) => {
-      const filtered = state.conversations.filter((c) => c.id !== id)
-      const wasActive = state.activeConversationId === id
-      let newActiveId = state.activeConversationId
-      if (wasActive) {
-        // 切换到最新剩余的会话
-        const sorted = [...filtered].sort(sortConversationsByActivity)
-        newActiveId = sorted[0]?.id || ''
-      }
-      // 如果全部删完了，自动创建新的
-      if (filtered.length === 0) {
-        const newConv = createEmptyConversation()
-        return {
-          conversations: [newConv],
-          activeConversationId: newConv.id,
-          inputText: '',
-          isLoading: false,
-          abortController: null
-        }
-      }
-      return {
-        conversations: filtered,
-        activeConversationId: newActiveId,
+  deleteConversation: async (id) => {
+    if (typeof window !== 'undefined' && window.electronAPI?.deleteConversation) {
+      await window.electronAPI.deleteConversation(id)
+    }
+
+    const { activeConversationId, conversations } = get()
+    const wasActive = activeConversationId === id
+    const filtered = conversations.filter((c) => c.id !== id)
+
+    if (filtered.length === 0) {
+      set({
+        conversations: [],
+        activeConversationId: '',
         inputText: '',
         isLoading: false,
         abortController: null
-      }
+      })
+      await get().createConversation()
+      return
+    }
+
+    const newActiveId = wasActive
+      ? [...filtered].sort(sortConversationsByActivity)[0]?.id || ''
+      : activeConversationId
+
+    set({
+      conversations: filtered,
+      activeConversationId: newActiveId,
+      inputText: '',
+      isLoading: false,
+      abortController: null
     })
+
+    if (wasActive && newActiveId) {
+      await get().setActiveConversation(newActiveId)
+    }
   },
 
-  setActiveConversation: (id) => {
+  setActiveConversation: async (id) => {
     if (get().isLoading) return
-    set({
+    const messages = await fetchMessages(id)
+    set((state) => ({
+      conversations: updateConversation(state.conversations, id, (conversation) => ({
+        ...conversation,
+        messages
+      })),
       activeConversationId: id,
       inputText: '',
       isLoading: false,
       abortController: null
-    })
+    }))
   },
 
   loadConversations: async () => {
-    const stored = await loadConversations()
-    const merged = mergeConversations(stored, get().conversations)
-    const nextSession = ensureSingleEmptyConversation(merged)
-    set({
-      conversations: nextSession.conversations,
-      activeConversationId: nextSession.activeConversationId
-    })
-    if (nextSession.changed || merged.length !== stored.length) {
-      await saveConversations(nextSession.conversations)
+    if (typeof window === 'undefined' || !window.electronAPI?.listConversations) {
+      if (get().conversations.length === 0) {
+        await get().createConversation()
+      }
+      return
     }
+
+    const index = await window.electronAPI.listConversations()
+    let conversations = index.map((entry) => indexToConversation(entry))
+
+    if (conversations.length === 0) {
+      const created = await window.electronAPI.createConversation()
+      conversations = [created]
+    }
+
+    const activeConversationId = conversations[0]?.id || ''
+    const messages = activeConversationId
+      ? await fetchMessages(activeConversationId)
+      : []
+
+    set({
+      conversations: conversations.map((conversation, idx) => (
+        idx === 0 ? { ...conversation, messages } : conversation
+      )),
+      activeConversationId
+    })
   },
 
-  persistConversations: async () => {
-    await saveConversations(get().conversations)
+  touchConversation: async (conversationId, message) => {
+    if (typeof window !== 'undefined' && window.electronAPI?.touchConversation) {
+      const entry = await window.electronAPI.touchConversation(conversationId, message)
+      if (!entry) return
+      set((state) => ({
+        conversations: state.conversations.map((conversation) => (
+          conversation.id === conversationId
+            ? { ...conversation, title: entry.title, updatedAt: entry.updatedAt }
+            : conversation
+        ))
+      }))
+    }
   }
 }))

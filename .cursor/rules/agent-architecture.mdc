@@ -1,0 +1,51 @@
+---
+description: Copilot Agent LangChain.js architecture overview for iteration
+alwaysApply: true
+---
+
+# Agent Architecture (LangChain.js)
+
+Read full details in [ARCHITECTURE.md](../../ARCHITECTURE.md). Summary for coding sessions:
+
+## Process Split
+
+- **Main process** (`electron/agent/`): LangGraph agent, tools, LLM, checkpointer, security, IPC handlers.
+- **Renderer** (`src/`): React UI, Zustand, `executeAgentStream` bridge only. Never import Node APIs or LangChain in renderer.
+
+## Agent Engine
+
+- **Graph**: custom `StateGraph` in `electron/agent/graph.ts` — `prefetch → agent ⇄ tools`.
+- **LLM**: `ChatOpenAI` via `electron/agent/model.ts` (OpenAI-compatible baseURL).
+- **Tools**: LangChain `tool()` + Zod in `electron/agent/tools/`, exported as `ALL_TOOLS`. Register new tools only in `tools/index.ts`.
+- **Memory**: LangGraph `SqliteSaver` (`electron/agent/checkpointer.ts`). `conversationId` = `thread_id`.
+- **Session index**: electron-store key `conversation-index` (title/metadata only).
+
+## IPC
+
+- Stream chat: `conversationId` + `message` + `mode` (no history array).
+- Events unchanged: `thinking`, `text`, `replace_text`, `approval_required`, `done`, `error`.
+- Conversation IPC: `list-conversations`, `get-conversation-messages`, `create/delete/touch-conversation`.
+
+## Visual Output
+
+- Tools must use `render_visual`; output ` ```visual:type\n{json}\n``` ` via `replace_text`.
+- Types from `src/shared/visual-types.ts` (`VISUAL_TYPES`). UI parses in `src/utils/parseMessage.ts`, renders via `src/components/Visuals/`.
+
+## Prompts vs Tools
+
+- `SYSTEM_PROMPT`: behavior only (no tool names, schemas, or visual protocol).
+- Tool contracts: tool `description` + Zod schema only. See also `tool-call-architecture.mdc`.
+
+## Adding a Capability
+
+1. Add `electron/agent/tools/<name>.ts` with `tool()` + Zod.
+2. Register in `electron/agent/tools/index.ts`.
+3. For visuals: update `VISUAL_TYPES`, `parseMessage.ts`, `Visuals/index.ts`.
+4. Add tests in `tests/`.
+5. Do not add tool logic to `electron/main.ts` (entry + IPC registration only).
+
+## Security
+
+- Tools run in main process only. `exec_bash` uses `security/commandPolicy.ts` + IPC approval.
+- File access via `security/pathPolicy.ts` (workspace roots only).
+- Store IPC keys whitelisted in `electron/agent/constants.ts`.

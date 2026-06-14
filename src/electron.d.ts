@@ -1,15 +1,7 @@
 /// <reference types="vite/client" />
 
-import { ChatHistoryMessage, CommandMode, ExecCommandResult, LLMConfig, LLMTestResult } from '@/types'
-
-export interface ChatCompletionStreamEvent {
-  type: 'thinking' | 'thinking_done' | 'text' | 'replace_text' | 'approval_required' | 'done' | 'error'
-  chunk?: string
-  error?: string
-  approvalId?: string
-  command?: string
-  reason?: string
-}
+import { CommandMode, ExecCommandResult, LLMConfig, LLMTestResult, Message } from '@/types'
+import type { ChatCompletionStreamEvent, ConversationIndexEntry } from '@/shared/ipc'
 
 declare global {
   interface Window {
@@ -19,16 +11,17 @@ declare global {
       getLLMConfig: () => Promise<LLMConfig>
       saveLLMConfig: (config: LLMConfig) => Promise<void>
       testLLMConfig: (config: LLMConfig) => Promise<LLMTestResult>
-      chatCompletion: (
-        message: string,
-        options?: { history?: ChatHistoryMessage[] }
-      ) => Promise<string>
       chatCompletionStream: (
         requestId: string,
         message: string,
-        options: { mode?: CommandMode; history?: ChatHistoryMessage[] },
+        options: { conversationId: string; mode?: CommandMode },
         onEvent: (event: ChatCompletionStreamEvent) => void
       ) => (cancel?: boolean) => void
+      listConversations: () => Promise<ConversationIndexEntry[]>
+      getConversationMessages: (conversationId: string) => Promise<Message[]>
+      createConversation: () => Promise<{ id: string; title: string; messages: Message[]; createdAt: number; updatedAt: number }>
+      deleteConversation: (conversationId: string) => Promise<boolean>
+      touchConversation: (conversationId: string, message: string) => Promise<ConversationIndexEntry | null>
       execCommand: (
         command: string,
         options?: { cwd?: string; mode?: CommandMode; approvalToken?: string }
@@ -36,5 +29,7 @@ declare global {
     }
   }
 }
+
+export type { ChatCompletionStreamEvent }
 
 export {}

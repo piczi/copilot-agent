@@ -16,11 +16,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLLMConfig: () => ipcRenderer.invoke('get-llm-config'),
   saveLLMConfig: (config: unknown) => ipcRenderer.invoke('save-llm-config', config),
   testLLMConfig: (config: unknown) => ipcRenderer.invoke('test-llm-config', config),
-  chatCompletion: (message: string, options?: unknown) => ipcRenderer.invoke('chat-completion', message, options),
+  listConversations: () => ipcRenderer.invoke('list-conversations'),
+  getConversationMessages: (conversationId: string) => ipcRenderer.invoke('get-conversation-messages', conversationId),
+  createConversation: () => ipcRenderer.invoke('create-conversation'),
+  deleteConversation: (conversationId: string) => ipcRenderer.invoke('delete-conversation', conversationId),
+  touchConversation: (conversationId: string, message: string) => ipcRenderer.invoke('touch-conversation', conversationId, message),
   chatCompletionStream: (
     requestId: string,
     message: string,
-    options: { mode?: string; history?: unknown[] } | undefined,
+    options: { conversationId: string; mode?: string } | undefined,
     onEvent: (event: unknown) => void
   ) => {
     const channel = `chat-completion-stream:${requestId}`

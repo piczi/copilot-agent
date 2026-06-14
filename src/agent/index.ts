@@ -1,25 +1,10 @@
-import { ChatHistoryMessage, CommandMode } from '@/types'
-
-function parseThinking(content: string): { thinking: string; text: string } {
-  const thinkingMatch = content.match(/<thinking>([\s\S]*?)<\/thinking>/)
-  if (thinkingMatch) {
-    const thinking = thinkingMatch[1].trim()
-    const text = content.replace(thinkingMatch[0], '').trim()
-    return { thinking, text }
-  }
-  return { thinking: '', text: content }
-}
-
-interface ChatCompletionStreamEvent {
-  type: 'thinking' | 'thinking_done' | 'text' | 'replace_text' | 'done' | 'error'
-  chunk?: string
-  error?: string
-}
+import { CommandMode } from '@/types'
+import type { ChatCompletionStreamEvent } from '@/electron.d.ts'
 
 function waitForChatStream(
+  conversationId: string,
   message: string,
   mode: CommandMode,
-  history: ChatHistoryMessage[],
   onThinking: (chunk: string, complete: boolean) => void,
   onChunk: (chunk: string) => void,
   onReplace?: (content: string) => void,
@@ -50,7 +35,7 @@ function waitForChatStream(
     cleanup = window.electronAPI.chatCompletionStream(
       requestId,
       message,
-      { mode, history },
+      { conversationId, mode },
       (event: ChatCompletionStreamEvent) => {
         if (settled) return
 
@@ -95,15 +80,15 @@ function waitForChatStream(
 }
 
 export async function executeAgentStream(
+  conversationId: string,
   message: string,
   mode: CommandMode,
-  history: ChatHistoryMessage[],
   onThinking: (chunk: string, complete: boolean) => void,
   onChunk: (chunk: string) => void,
   onReplace?: (content: string) => void,
   signal?: AbortSignal
 ): Promise<{ thinking: string; text: string }> {
-  if (typeof window === 'undefined' || !window.electronAPI?.chatCompletion) {
+  if (typeof window === 'undefined' || !window.electronAPI?.chatCompletionStream) {
     const msg = '当前环境不支持 LLM 请求'
     onChunk(msg)
     return { thinking: '', text: msg }
@@ -111,24 +96,11 @@ export async function executeAgentStream(
 
   try {
     if (signal?.aborted) throw new Error('已取消')
-    if (window.electronAPI.chatCompletionStream) {
-      return await waitForChatStream(message, mode, history, onThinking, onChunk, onReplace, signal)
-    }
-
-    const content = await window.electronAPI.chatCompletion(message, { history })
-    const { thinking, text } = parseThinking(content)
-    if (thinking) {
-      onThinking(thinking, false)
-      onThinking('', true)
-    }
-    onChunk(text)
-    return { thinking, text }
+    return await waitForChatStream(conversationId, message, mode, onThinking, onChunk, onReplace, signal)
   } catch (e) {
     if (e instanceof Error && e.message === '已取消') throw e
     const msg = e instanceof Error ? e.message : String(e)
-    const errorMsg = msg.includes("No handler registered for 'chat-completion'")
-      ? '请求失败：主进程尚未加载新版 LLM IPC，请重启应用后再试。'
-      : `请求失败: ${msg}`
+    const errorMsg = `请求失败: ${msg}`
     onChunk(errorMsg)
     return { thinking: '', text: errorMsg }
   }
