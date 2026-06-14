@@ -1,6 +1,6 @@
 import React, { memo, useMemo } from 'react'
 import ReactECharts from 'echarts-for-react'
-import { areChartDataPointsEqual, ChartDataPoint, useChartTheme } from './chartUtils'
+import { areChartDataPointsEqual, ChartDataPoint, normalizeChartData, useChartTheme } from './chartUtils'
 
 interface LineChartProps {
   title: string
@@ -10,8 +10,10 @@ interface LineChartProps {
   seriesName: string
 }
 
-const LineChart: React.FC<LineChartProps> = ({ title, data, seriesName }) => {
+const LineChart: React.FC<LineChartProps> = ({ title, data: rawData, seriesName }) => {
   const theme = useChartTheme()
+  const data = useMemo(() => normalizeChartData(rawData), [rawData])
+
   const option = useMemo(
     () => ({
       backgroundColor: 'transparent',
@@ -92,7 +94,7 @@ function areLineChartPropsEqual(prev: LineChartProps, next: LineChartProps) {
     prev.xAxis === next.xAxis &&
     prev.yAxis === next.yAxis &&
     prev.seriesName === next.seriesName &&
-    areChartDataPointsEqual(prev.data, next.data)
+    areChartDataPointsEqual(normalizeChartData(prev.data), normalizeChartData(next.data))
   )
 }
 

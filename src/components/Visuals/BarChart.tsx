@@ -1,6 +1,6 @@
 import React, { memo, useMemo } from 'react'
 import ReactECharts from 'echarts-for-react'
-import { areChartDataPointsEqual, ChartDataPoint, useChartTheme } from './chartUtils'
+import { areChartDataPointsEqual, ChartDataPoint, normalizeChartData, useChartTheme } from './chartUtils'
 
 interface BarChartProps {
   title: string
@@ -10,8 +10,10 @@ interface BarChartProps {
   seriesName: string
 }
 
-const BarChart: React.FC<BarChartProps> = ({ title, data, seriesName }) => {
+const BarChart: React.FC<BarChartProps> = ({ title, data: rawData, seriesName }) => {
   const theme = useChartTheme()
+  const data = useMemo(() => normalizeChartData(rawData), [rawData])
+
   const option = useMemo(
     () => ({
       backgroundColor: 'transparent',
@@ -83,7 +85,7 @@ function areBarChartPropsEqual(prev: BarChartProps, next: BarChartProps) {
     prev.xAxis === next.xAxis &&
     prev.yAxis === next.yAxis &&
     prev.seriesName === next.seriesName &&
-    areChartDataPointsEqual(prev.data, next.data)
+    areChartDataPointsEqual(normalizeChartData(prev.data), normalizeChartData(next.data))
   )
 }
 

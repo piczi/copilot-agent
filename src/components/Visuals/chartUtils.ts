@@ -6,6 +6,33 @@ export interface ChartDataPoint {
   value: number
 }
 
+interface RawChartItem {
+  [key: string]: unknown
+}
+
+function normalizeChartItem(item: RawChartItem): ChartDataPoint {
+  const name =
+    typeof item.name === 'string'
+      ? item.name
+      : typeof item.date === 'string'
+        ? item.date
+        : typeof item.x === 'string'
+          ? item.x
+          : String(item.name ?? item.date ?? item.x ?? '')
+
+  const rawValue = item.value ?? item.price ?? item.y ?? item.rate ?? item.count
+  const value = typeof rawValue === 'number' && Number.isFinite(rawValue) ? rawValue : Number(rawValue) || 0
+
+  return { name, value }
+}
+
+export function normalizeChartData(data: unknown): ChartDataPoint[] {
+  if (!Array.isArray(data)) return []
+  return data
+    .filter((item): item is RawChartItem => item !== null && typeof item === 'object')
+    .map(normalizeChartItem)
+}
+
 export function areChartDataPointsEqual(a: ChartDataPoint[], b: ChartDataPoint[]) {
   if (a === b) return true
   if (a.length !== b.length) return false

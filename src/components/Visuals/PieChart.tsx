@@ -1,6 +1,6 @@
 import React, { memo, useMemo } from 'react'
 import ReactECharts from 'echarts-for-react'
-import { areChartDataPointsEqual, ChartDataPoint, useChartTheme } from './chartUtils'
+import { areChartDataPointsEqual, ChartDataPoint, normalizeChartData, useChartTheme } from './chartUtils'
 
 interface PieChartProps {
   title: string
@@ -9,8 +9,10 @@ interface PieChartProps {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316']
 
-const PieChart: React.FC<PieChartProps> = ({ title, data }) => {
+const PieChart: React.FC<PieChartProps> = ({ title, data: rawData }) => {
   const theme = useChartTheme()
+  const data = useMemo(() => normalizeChartData(rawData), [rawData])
+
   const option = useMemo(
     () => ({
       backgroundColor: 'transparent',
@@ -63,8 +65,8 @@ const PieChart: React.FC<PieChartProps> = ({ title, data }) => {
           data: data.map((item, i) => ({
             ...item,
             itemStyle: { color: COLORS[i % COLORS.length] }
-          }))
-        },
+          })),
+        }
       ]
     }),
     [data, theme, title]
@@ -78,7 +80,7 @@ const PieChart: React.FC<PieChartProps> = ({ title, data }) => {
 }
 
 function arePieChartPropsEqual(prev: PieChartProps, next: PieChartProps) {
-  return prev.title === next.title && areChartDataPointsEqual(prev.data, next.data)
+  return prev.title === next.title && areChartDataPointsEqual(normalizeChartData(prev.data), normalizeChartData(next.data))
 }
 
 export default memo(PieChart, arePieChartPropsEqual)

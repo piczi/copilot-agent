@@ -740,7 +740,7 @@ const CHAT_TOOLS = [
     type: 'function',
     function: {
       name: 'render_visual',
-      description: '把已获取的真实数据渲染成前端可展示的可视化组件。图表只能通过本工具输出；禁止在回复正文中手写 ```visual 或 visual: 代码块。只能基于工具返回或用户明确提供的数据调用。',
+      description: '把已获取的真实数据渲染成前端可展示的可视化组件。图表只能通过本工具输出；禁止在回复正文中手写 ```visual 或 visual: 代码块。只能基于工具返回或用户明确提供的数据调用。调用前必须先把 fetch_gold/fetch_crypto/fetch_exchange_rate 返回的原始 history 数组映射为图表要求的格式。',
       parameters: {
         type: 'object',
         properties: {
@@ -751,7 +751,7 @@ const CHAT_TOOLS = [
           },
           data: {
             type: 'object',
-            description: '组件数据。line_chart/bar_chart 使用 { title, xAxis, yAxis, data: [{ name, value }], seriesName }；pie_chart 使用 { title, data: [{ name, value }] }；weather_card 使用 { city, temperature, feelsLike, condition, humidity, windSpeed, forecast }；terminal 使用 { command, platform, output, exitCode }。'
+            description: '组件数据。line_chart/bar_chart 使用 { title, xAxis, yAxis, data: [{ name, value }], seriesName }，其中 data 必须是从原始 history 映射而来，例如黄金价格 history:[{date, price}] 要映射为 data:[{name: date, value: price}]；pie_chart 使用 { title, data: [{ name, value }] }；weather_card 使用 { city, temperature, feelsLike, condition, humidity, windSpeed, forecast }；terminal 使用 { command, platform, output, exitCode }。'
           }
         },
         required: ['type', 'data']
