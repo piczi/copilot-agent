@@ -55,6 +55,14 @@
   --input: 220 18% 88%;
   --ring: 226 71% 56%;
   --radius: 0.5rem;
+  --titlebar-traffic-lights-inset: 78px;
+  --titlebar-height: 2rem;
+  --titlebar-actions-padding-top: 0px;
+}
+
+[data-platform='darwin'] {
+  --titlebar-height: 2.5rem;
+  --titlebar-actions-padding-top: 7px;
 }
 
 .dark {
@@ -164,6 +172,17 @@
 
   .window-drag {
     -webkit-app-region: drag;
+  }
+
+  .window-toolbar {
+    height: var(--titlebar-height);
+    align-items: center;
+  }
+
+  [data-platform='darwin'] .window-toolbar {
+    padding-left: var(--titlebar-traffic-lights-inset);
+    align-items: flex-start;
+    padding-top: var(--titlebar-actions-padding-top);
   }
 
   .window-no-drag {

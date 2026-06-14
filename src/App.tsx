@@ -237,7 +237,7 @@ function App() {
 
   return (
     <div className="aurora-bg flex h-screen flex-col overflow-hidden text-foreground">
-      <div className="window-drag z-20 flex h-8 shrink-0 items-center border-b border-border bg-background/95 px-1.5">
+      <div className="window-toolbar window-drag z-20 flex shrink-0 border-b border-border bg-background/95 px-1.5">
         <div className="window-no-drag flex items-center gap-1">
           <motion.div {...pressable}>
             <Button

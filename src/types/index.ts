@@ -95,3 +95,15 @@ export interface CryptoData {
     price: number
   }>
 }
+
+export interface GoldData {
+  name: string
+  symbol: string
+  unit: string
+  currentPrice: number
+  priceChange24h: number
+  history: Array<{
+    date: string
+    price: number
+  }>
+}

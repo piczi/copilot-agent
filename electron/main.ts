@@ -3,10 +3,12 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import fs from 'node:fs/promises'
 import StoreModule from 'electron-store'
 import { SYSTEM_PROMPT } from '@/agent/prompts/system'
 import { fetchCrypto, resolveCoinId } from '@/services/crypto'
 import { fetchExchangeRate } from '@/services/exchange-rate'
+import { fetchGold } from '@/services/gold'
 import { fetchWeather } from '@/services/weather'
 const Store = (StoreModule as any).default || StoreModule
 
@@ -27,6 +29,7 @@ const LLM_CONFIG_KEY = 'llm-config'
 const MAX_COMMAND_LENGTH = 2000
 const MAX_TOOL_TURNS = 10
 const MAX_OUTPUT_LENGTH = 100_000
+const MAX_READ_FILE_BYTES = 512 * 1024
 const APPROVAL_TTL_MS = 60_000
 
 type CommandMode = 'restricted' | 'dangerous'
@@ -222,8 +225,8 @@ function getRuntimePlatformInstruction(): string {
   if (process.platform === 'win32') {
     return [
       '当前运行平台：Windows (process.platform=win32)。',
-      '需要执行或建议系统命令时，必须使用 Windows PowerShell 语法，例如 Get-ChildItem、Get-Content、Select-String、Get-Location。',
-      '如果需要读取本机信息，必须调用 exec_bash 工具生成并执行只读 PowerShell 命令。',
+      '读取工作区文件或列出目录时，优先使用 read_file、list_directory，不要改用 exec_bash。',
+      '需要执行其他系统命令时，必须使用 Windows PowerShell 语法，例如 Get-ComputerInfo、Select-String、Get-Location。',
       '不要使用 uname、sysctl、system_profiler、ls -la 等 macOS/Linux 专属写法来判断本机信息。'
     ].join('\n')
   }
@@ -231,16 +234,16 @@ function getRuntimePlatformInstruction(): string {
   if (process.platform === 'darwin') {
     return [
       '当前运行平台：macOS (process.platform=darwin)。',
-      '需要执行或建议系统命令时，必须使用 macOS/POSIX Shell 语法，例如 uname、sysctl、system_profiler、ls、cat、grep、pwd。',
-      '如果需要读取本机信息，必须调用 exec_bash 工具生成并执行只读 macOS/POSIX 命令。',
+      '读取工作区文件或列出目录时，优先使用 read_file、list_directory，不要改用 exec_bash。',
+      '需要执行其他系统命令时，必须使用 macOS/POSIX Shell 语法，例如 uname、sysctl、system_profiler、pwd。',
       '不要使用 Get-CimInstance、Get-ComputerInfo、PowerShell 管道对象等 Windows 专属写法来判断本机信息。'
     ].join('\n')
   }
 
   return [
     `当前运行平台：Linux (process.platform=${process.platform})。`,
-    '需要执行或建议系统命令时，必须使用 Linux/POSIX Shell 语法，例如 uname、lscpu、free、df、ls、cat、grep、pwd。',
-    '如果需要读取本机信息，必须调用 exec_bash 工具生成并执行只读 Linux/POSIX 命令。',
+    '读取工作区文件或列出目录时，优先使用 read_file、list_directory，不要改用 exec_bash。',
+    '需要执行其他系统命令时，必须使用 Linux/POSIX Shell 语法，例如 uname、lscpu、free、df、pwd。',
     '不要使用 Get-CimInstance、system_profiler 等其他平台专属写法来判断本机信息。'
   ].join('\n')
 }
@@ -265,6 +268,163 @@ function extractWeatherCity(message: string): string {
   if (before) return before
 
   return cleanWeatherCityCandidate(message.slice(keywordMatch.index + keywordMatch[0].length))
+}
+
+const CURRENCY_ALIASES: Record<string, string> = {
+  usd: 'USD',
+  cny: 'CNY',
+  rmb: 'CNY',
+  eur: 'EUR',
+  jpy: 'JPY',
+  gbp: 'GBP',
+  hkd: 'HKD',
+  aud: 'AUD',
+  cad: 'CAD',
+  chf: 'CHF',
+  美元: 'USD',
+  美金: 'USD',
+  人民币: 'CNY',
+  欧元: 'EUR',
+  日元: 'JPY',
+  英镑: 'GBP',
+  港币: 'HKD',
+  港元: 'HKD'
+}
+
+const CRYPTO_NAME_PATTERNS: Array<[RegExp, string]> = [
+  [/比特币|\bbitcoin\b|\bbtc\b/i, 'bitcoin'],
+  [/以太坊|\bethereum\b|\beth\b/i, 'ethereum'],
+  [/索拉纳|\bsolana\b|\bsol\b/i, 'solana'],
+  [/狗狗币|\bdogecoin\b|\bdoge\b/i, 'dogecoin'],
+  [/瑞波|\bripple\b|\bxrp\b/i, 'ripple'],
+  [/艾达币|\bcardano\b|\bada\b/i, 'cardano']
+]
+
+function normalizeCurrencyCode(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  const alias = CURRENCY_ALIASES[trimmed.toLowerCase()] || CURRENCY_ALIASES[trimmed]
+  if (alias) return alias
+  if (/^[A-Za-z]{3}$/.test(trimmed)) return trimmed.toUpperCase()
+  return ''
+}
+
+function isGoldQuery(message: string): boolean {
+  if (isWeatherQuery(message)) return false
+  return /黄金|金价|gold\s*price|\bxau\b|贵金属/i.test(message)
+}
+
+function extractGoldDays(message: string): number {
+  return extractHistoryDays(message) || 7
+}
+
+function isCryptoQuery(message: string): boolean {
+  if (isWeatherQuery(message) || isGoldQuery(message)) return false
+  return /加密货币|数字货币|虚拟币|币价|行情|\bcrypto\b/i.test(message)
+    || CRYPTO_NAME_PATTERNS.some(([pattern]) => pattern.test(message))
+}
+
+function extractCryptoCoinId(message: string): string {
+  for (const [pattern, coinId] of CRYPTO_NAME_PATTERNS) {
+    if (pattern.test(message)) return coinId
+  }
+  return ''
+}
+
+function isExchangeRateQuery(message: string): boolean {
+  if (isWeatherQuery(message) || isCryptoQuery(message) || isGoldQuery(message)) return false
+  if (/汇率|exchange\s*rate|外汇|换算/i.test(message)) return true
+  if (/兑(?:换|率)?/.test(message) && /美元|人民币|欧元|日元|英镑|USD|CNY|EUR|JPY|GBP/i.test(message)) {
+    return true
+  }
+  return /\b(USD|CNY|EUR|JPY|GBP|HKD|AUD|CAD|CHF)\b[^.\n]{0,24}\b(USD|CNY|EUR|JPY|GBP|HKD|AUD|CAD|CHF)\b/i.test(message)
+}
+
+function extractExchangeRatePair(message: string): { base: string; target: string; days?: number } | null {
+  const isoPair = message.match(/\b(USD|CNY|EUR|JPY|GBP|HKD|AUD|CAD|CHF)\b\s*(?:\/|对|兑|to|->)\s*\b(USD|CNY|EUR|JPY|GBP|HKD|AUD|CAD|CHF)\b/i)
+  if (isoPair) {
+    return {
+      base: isoPair[1].toUpperCase(),
+      target: isoPair[2].toUpperCase(),
+      days: extractHistoryDays(message)
+    }
+  }
+
+  const zhPair = message.match(/(美元|美金|人民币|欧元|日元|英镑|港币|港元)\s*(?:对|兑|换|\/)\s*(美元|美金|人民币|欧元|日元|英镑|港币|港元)/)
+  if (zhPair) {
+    const base = normalizeCurrencyCode(zhPair[1])
+    const target = normalizeCurrencyCode(zhPair[2])
+    if (base && target) {
+      return { base, target, days: extractHistoryDays(message) }
+    }
+  }
+
+  const codes = [...message.matchAll(/\b(USD|CNY|EUR|JPY|GBP|HKD|AUD|CAD|CHF)\b/gi)]
+    .map((match) => match[1].toUpperCase())
+  if (codes.length >= 2) {
+    return {
+      base: codes[0],
+      target: codes[1],
+      days: extractHistoryDays(message)
+    }
+  }
+
+  return null
+}
+
+function extractHistoryDays(message: string): number | undefined {
+  const match = /(?:最近|近|过去)?\s*(\d{1,3})\s*天/.exec(message)
+  if (!match) return undefined
+  const days = Number(match[1])
+  return Number.isFinite(days) && days > 0 ? days : undefined
+}
+
+function getAllowedRoots(): string[] {
+  const appRoot = process.env.APP_ROOT || process.cwd()
+  return [path.resolve(process.cwd()), path.resolve(appRoot)]
+}
+
+function resolveAllowedPath(inputPath = '.'): { ok: true; absolutePath: string } | { ok: false; reason: string } {
+  const allowedRoots = getAllowedRoots()
+  const absolutePath = path.resolve(inputPath.trim() || '.')
+  const isAllowed = allowedRoots.some((root) => absolutePath === root || absolutePath.startsWith(root + path.sep))
+  if (!isAllowed) {
+    return { ok: false, reason: '路径不在允许的工作区范围内' }
+  }
+  return { ok: true, absolutePath }
+}
+
+async function buildPrefetchedToolTurn(
+  message: string,
+  toolName: string,
+  args: Record<string, unknown>,
+  reasoning: string,
+  fetchResult: () => Promise<string>
+): Promise<ChatMessage[]> {
+  const toolCallId = `${toolName}_${randomUUID()}`
+  return [
+    { role: 'user', content: message },
+    {
+      role: 'assistant',
+      content: null,
+      tool_calls: [
+        {
+          id: toolCallId,
+          type: 'function',
+          function: {
+            name: toolName,
+            arguments: JSON.stringify(args)
+          }
+        }
+      ],
+      reasoning_content: reasoning
+    },
+    {
+      role: 'tool',
+      tool_call_id: toolCallId,
+      content: await fetchResult()
+    }
+  ]
 }
 
 function runLocalCommand(
@@ -538,6 +698,22 @@ const CHAT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'fetch_gold',
+      description: '获取真实黄金价格数据（美元/盎司），包含当前价格、24小时涨跌幅和历史日线。用户询问黄金、金价、贵金属价格、走势、趋势或图表时必须使用，不要用 curl 或 exec_bash 自行抓取。获取数据后如需展示图表，必须继续调用 render_visual。',
+      parameters: {
+        type: 'object',
+        properties: {
+          days: {
+            type: 'number',
+            description: '历史天数，默认 7 天，最多 365 天'
+          }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'fetch_exchange_rate',
       description: '获取两种货币之间的真实历史汇率数据。base 和 target 均为 3 字母货币代码，如 CNY, USD, EUR, JPY, GBP。用户询问汇率、走势、趋势或图表时必须使用，不要凭记忆编造汇率数据。获取数据后如需展示图表，继续调用 render_visual。',
       parameters: {
@@ -564,7 +740,7 @@ const CHAT_TOOLS = [
     type: 'function',
     function: {
       name: 'render_visual',
-      description: '把已获取的真实数据渲染成前端可展示的可视化组件。只能基于工具返回或用户明确提供的数据调用；不要直接在回复正文中手写 XML、HTML、JSX 或组件标签。',
+      description: '把已获取的真实数据渲染成前端可展示的可视化组件。图表只能通过本工具输出；禁止在回复正文中手写 ```visual 或 visual: 代码块。只能基于工具返回或用户明确提供的数据调用。',
       parameters: {
         type: 'object',
         properties: {
@@ -585,8 +761,41 @@ const CHAT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'read_file',
+      description: '读取当前工作区或项目目录内指定文件的文本内容。用户明确要求查看、读取、打开某个文件内容时必须优先使用，不要凭记忆编造文件内容，也不要改用 exec_bash。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: '文件路径，如 README.md、src/App.tsx、package.json'
+          }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_directory',
+      description: '列出当前工作区或项目目录内指定路径下的文件和文件夹。用户要求查看目录结构、列出项目文件时必须优先使用，不要改用 exec_bash。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: '目录路径，默认为 "."'
+          }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'exec_bash',
-      description: '真实执行当前电脑上的系统命令。Windows 使用 PowerShell，macOS/Linux 使用 /bin/sh -c。受限模式下高风险、写入、网络请求或组合命令会请求用户审批；危险模式下用户已允许直接执行。',
+      description: '真实执行当前电脑上的系统命令，用于 read_file、list_directory 无法覆盖的本机只读查询。禁止用 curl/wget 获取天气、汇率、加密货币、黄金等已接入数据。读取单个文件或列出目录时不要使用本工具。Windows 使用 PowerShell，macOS/Linux 使用 /bin/sh -c。受限模式下高风险、写入、网络请求或组合命令会请求用户审批；危险模式下用户已允许直接执行。',
       parameters: {
         type: 'object',
         properties: {
@@ -631,6 +840,18 @@ async function executeFetchCryptoTool(coinId: string): Promise<string> {
   }
 }
 
+async function executeFetchGoldTool(days?: number): Promise<string> {
+  const safeDays = Number.isFinite(days) && days && days > 0 ? Math.min(Math.floor(days), 365) : 7
+
+  try {
+    return JSON.stringify(await fetchGold(safeDays), null, 2)
+  } catch (err) {
+    return JSON.stringify({
+      error: `获取黄金数据失败: ${err instanceof Error ? err.message : String(err)}`
+    })
+  }
+}
+
 async function executeFetchExchangeRateTool(base: string, target: string, days?: number): Promise<string> {
   const trimmedBase = base.trim().toUpperCase()
   const trimmedTarget = target.trim().toUpperCase()
@@ -645,6 +866,71 @@ async function executeFetchExchangeRateTool(base: string, target: string, days?:
   } catch (err) {
     return JSON.stringify({
       error: `获取汇率失败: ${err instanceof Error ? err.message : String(err)}`
+    })
+  }
+}
+
+async function executeReadFileTool(filePath: string): Promise<string> {
+  const trimmedPath = filePath.trim()
+  if (!trimmedPath) {
+    return JSON.stringify({ error: '文件路径不能为空' })
+  }
+
+  const resolved = resolveAllowedPath(trimmedPath)
+  if (!resolved.ok) {
+    return JSON.stringify({ error: resolved.reason })
+  }
+
+  try {
+    const stat = await fs.stat(resolved.absolutePath)
+    if (!stat.isFile()) {
+      return JSON.stringify({ error: '指定路径不是文件' })
+    }
+    if (stat.size > MAX_READ_FILE_BYTES) {
+      return JSON.stringify({ error: `文件过大（超过 ${MAX_READ_FILE_BYTES} 字节），请指定更小的文件或分段读取` })
+    }
+
+    const content = await fs.readFile(resolved.absolutePath, 'utf8')
+    return JSON.stringify({
+      path: path.relative(process.cwd(), resolved.absolutePath) || trimmedPath,
+      size: stat.size,
+      content: truncateOutput(content)
+    }, null, 2)
+  } catch (err) {
+    return JSON.stringify({
+      error: `读取文件失败: ${err instanceof Error ? err.message : String(err)}`
+    })
+  }
+}
+
+async function executeListDirectoryTool(dirPath = '.'): Promise<string> {
+  const trimmedPath = dirPath.trim() || '.'
+  const resolved = resolveAllowedPath(trimmedPath)
+  if (!resolved.ok) {
+    return JSON.stringify({ error: resolved.reason })
+  }
+
+  try {
+    const stat = await fs.stat(resolved.absolutePath)
+    if (!stat.isDirectory()) {
+      return JSON.stringify({ error: '指定路径不是目录' })
+    }
+
+    const entries = await fs.readdir(resolved.absolutePath, { withFileTypes: true })
+    const items = entries
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((entry) => ({
+        name: entry.name,
+        type: entry.isDirectory() ? 'directory' : 'file'
+      }))
+
+    return JSON.stringify({
+      path: path.relative(process.cwd(), resolved.absolutePath) || trimmedPath,
+      items
+    }, null, 2)
+  } catch (err) {
+    return JSON.stringify({
+      error: `列出目录失败: ${err instanceof Error ? err.message : String(err)}`
     })
   }
 }
@@ -670,30 +956,73 @@ async function createWeatherToolMessages(message: string): Promise<ChatMessage[]
   const city = extractWeatherCity(message)
   if (!city) return undefined
 
-  const toolCallId = `fetch_weather_${randomUUID()}`
-  return [
-    { role: 'user', content: message },
-    {
-      role: 'assistant',
-      content: null,
-      tool_calls: [
-        {
-          id: toolCallId,
-          type: 'function',
-          function: {
-            name: 'fetch_weather',
-            arguments: JSON.stringify({ city })
-          }
-        }
-      ],
-      reasoning_content: `需要获取 "${city}" 的真实天气数据。`
-    },
-    {
-      role: 'tool',
-      tool_call_id: toolCallId,
-      content: await executeFetchWeatherTool(city)
-    }
-  ]
+  return buildPrefetchedToolTurn(
+    message,
+    'fetch_weather',
+    { city },
+    `需要获取 "${city}" 的真实天气数据。`,
+    () => executeFetchWeatherTool(city)
+  )
+}
+
+async function createCryptoToolMessages(message: string): Promise<ChatMessage[] | undefined> {
+  if (!isCryptoQuery(message)) return undefined
+
+  const coinId = extractCryptoCoinId(message)
+  if (!coinId) return undefined
+
+  return buildPrefetchedToolTurn(
+    message,
+    'fetch_crypto',
+    { coinId },
+    `需要获取 "${coinId}" 的真实加密货币行情数据。`,
+    () => executeFetchCryptoTool(coinId)
+  )
+}
+
+async function createGoldToolMessages(message: string): Promise<ChatMessage[] | undefined> {
+  if (!isGoldQuery(message)) return undefined
+
+  const days = extractGoldDays(message)
+  const args: Record<string, unknown> = { days }
+
+  return buildPrefetchedToolTurn(
+    message,
+    'fetch_gold',
+    args,
+    `需要获取最近 ${days} 天的真实黄金价格数据。`,
+    () => executeFetchGoldTool(days)
+  )
+}
+
+async function createExchangeRateToolMessages(message: string): Promise<ChatMessage[] | undefined> {
+  if (!isExchangeRateQuery(message)) return undefined
+
+  const pair = extractExchangeRatePair(message)
+  if (!pair) return undefined
+
+  const args: Record<string, unknown> = {
+    base: pair.base,
+    target: pair.target
+  }
+  if (pair.days) args.days = pair.days
+
+  return buildPrefetchedToolTurn(
+    message,
+    'fetch_exchange_rate',
+    args,
+    `需要获取 ${pair.base}/${pair.target} 的真实汇率数据。`,
+    () => executeFetchExchangeRateTool(pair.base, pair.target, pair.days)
+  )
+}
+
+async function createPrefetchedToolMessages(message: string): Promise<ChatMessage[] | undefined> {
+  return (
+    await createWeatherToolMessages(message)
+    || await createGoldToolMessages(message)
+    || await createCryptoToolMessages(message)
+    || await createExchangeRateToolMessages(message)
+  )
 }
 
 function sanitizeHistoryMessages(history: unknown): ChatMessage[] {
@@ -716,13 +1045,13 @@ function sanitizeHistoryMessages(history: unknown): ChatMessage[] {
 }
 
 async function createInitialMessages(message: string, history: ChatHistoryMessage[] = []): Promise<ChatMessage[]> {
-  const weatherToolMessages = await createWeatherToolMessages(message)
+  const prefetchedToolMessages = await createPrefetchedToolMessages(message)
   const historyMessages = sanitizeHistoryMessages(history)
   return [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'system', content: getRuntimePlatformInstruction() },
     ...historyMessages,
-    ...(weatherToolMessages || [{ role: 'user' as const, content: message }])
+    ...(prefetchedToolMessages || [{ role: 'user' as const, content: message }])
   ]
 }
 
@@ -920,11 +1249,11 @@ async function streamNativeChat(
         content: [
           '上一轮模型或工具调用失败。不要把原始错误直接展示给用户。',
           `错误摘要：${err instanceof Error ? err.message : String(err)}`,
-          '请基于已有上下文继续给出有帮助的回答；如果缺少必要数据，请用自然语言说明暂时无法完成。'
+          '请基于已有上下文继续给出有帮助的回答；请尝试其他可用方式（如专用数据查询或只读网络请求）获取数据后再回答；仅在合理途径都失败后才说明暂时无法完成。'
         ].join('\n')
       })
       try {
-        turnResult = await streamChatCompletionTurn(config, messages, routedEmit, contentRouter, signal, false)
+        turnResult = await streamChatCompletionTurn(config, messages, routedEmit, contentRouter, signal)
       } catch {
         routedEmit({ type: 'text', chunk: '请求暂时失败，我已经尝试恢复但仍无法完成这次回答。' })
         emit({ type: 'done' })
@@ -983,6 +1312,24 @@ async function streamNativeChat(
         continue
       }
 
+      if (toolCall.function.name === 'fetch_gold') {
+        let days: number | undefined
+        try {
+          days = Number(JSON.parse(toolCall.function.arguments || '{}').days)
+        } catch {
+          days = undefined
+        }
+
+        const result = await executeFetchGoldTool(days)
+        if (signal.aborted) return
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: result
+        })
+        continue
+      }
+
       if (toolCall.function.name === 'fetch_exchange_rate') {
         let base = ''
         let target = ''
@@ -1029,6 +1376,42 @@ async function streamNativeChat(
           role: 'tool',
           tool_call_id: toolCall.id,
           content: JSON.stringify(result.ok ? { rendered: true } : { error: result.error })
+        })
+        continue
+      }
+
+      if (toolCall.function.name === 'read_file') {
+        let filePath = ''
+        try {
+          filePath = JSON.parse(toolCall.function.arguments || '{}').path || ''
+        } catch {
+          filePath = ''
+        }
+
+        const result = await executeReadFileTool(filePath)
+        if (signal.aborted) return
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: result
+        })
+        continue
+      }
+
+      if (toolCall.function.name === 'list_directory') {
+        let dirPath = '.'
+        try {
+          dirPath = JSON.parse(toolCall.function.arguments || '{}').path || '.'
+        } catch {
+          dirPath = '.'
+        }
+
+        const result = await executeListDirectoryTool(dirPath)
+        if (signal.aborted) return
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: result
         })
         continue
       }
@@ -1172,6 +1555,22 @@ async function nativeChat(config: LLMConfig, message: string, history: ChatHisto
         continue
       }
 
+      if (toolCall.function.name === 'fetch_gold') {
+        let days: number | undefined
+        try {
+          days = Number(JSON.parse(toolCall.function.arguments || '{}').days)
+        } catch {
+          days = undefined
+        }
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: await executeFetchGoldTool(days)
+        })
+        continue
+      }
+
       if (toolCall.function.name === 'fetch_exchange_rate') {
         let base = ''
         let target = ''
@@ -1210,6 +1609,38 @@ async function nativeChat(config: LLMConfig, message: string, history: ChatHisto
           role: 'tool',
           tool_call_id: toolCall.id,
           content: result.ok && result.block ? result.block : JSON.stringify({ error: result.error })
+        })
+        continue
+      }
+
+      if (toolCall.function.name === 'read_file') {
+        let filePath = ''
+        try {
+          filePath = JSON.parse(toolCall.function.arguments || '{}').path || ''
+        } catch {
+          filePath = ''
+        }
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: await executeReadFileTool(filePath)
+        })
+        continue
+      }
+
+      if (toolCall.function.name === 'list_directory') {
+        let dirPath = '.'
+        try {
+          dirPath = JSON.parse(toolCall.function.arguments || '{}').path || '.'
+        } catch {
+          dirPath = '.'
+        }
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: await executeListDirectoryTool(dirPath)
         })
         continue
       }
@@ -1382,6 +1813,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 12, y: 14 },
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),

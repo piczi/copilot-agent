@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+function applyPlatformAttributes() {
+  document.documentElement.dataset.platform = process.platform
+}
+
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', applyPlatformAttributes)
+} else {
+  applyPlatformAttributes()
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   getStoreValue: (key: string) => ipcRenderer.invoke('get-store-value', key),
   setStoreValue: (key: string, value: unknown) => ipcRenderer.invoke('set-store-value', key, value),
